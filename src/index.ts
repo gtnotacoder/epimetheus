@@ -626,6 +626,26 @@ export default function (pi: ExtensionAPI) {
         content: recallContent,
         timestamp: cachedRecall.timestamp,
       };
+      // FIX (trailing-user-turn bug): appending the recall as the final message
+      // makes the invisible <hindsight_memories> block the trailing USER turn, so
+      // the model answers it instead of the user's real prompt ("...last message
+      // only contains the hindsight memories block..."). When injecting as the
+      // "user" role, insert it *before* the current (last) user message so the
+      // real prompt stays the trailing turn. Assistant-role injection is unaffected.
+      const __hsLastIdx = filteredMessages.length - 1;
+      if (
+        config.autoRecallRole === "user" &&
+        __hsLastIdx >= 0 &&
+        filteredMessages[__hsLastIdx]?.role === "user"
+      ) {
+        return {
+          messages: [
+            ...filteredMessages.slice(0, __hsLastIdx),
+            recallMessage,
+            filteredMessages[__hsLastIdx],
+          ],
+        } as Record<string, unknown>;
+      }
       return { messages: [...filteredMessages, recallMessage] } as Record<string, unknown>;
     }
 
