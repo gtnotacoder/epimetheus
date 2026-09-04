@@ -3,6 +3,7 @@
 Detailed configuration, tools, commands, and operational details for epimetheus. For getting started, see the [main README](../README.md).
 
 # Table of Contents
+
 - [Configuration](#configuration)
   - [General Settings](#general-settings)
     - [Disabled Mode](#disabled-mode)
@@ -39,6 +40,7 @@ Detailed configuration, tools, commands, and operational details for epimetheus.
   - [subagents](#subagents)
 
 # Configuration
+
 Configuration is stored in `<getAgentDir()>/epimetheus/config.json` or `config.jsonc` (JSONC has precedence). See the [Example Configuration](../README.md#example-configuration) in the main README for a practical starting point.
 
 ## General Settings
@@ -63,6 +65,7 @@ Configuration is stored in `<getAgentDir()>/epimetheus/config.json` or `config.j
 | `debug` | `false` | Enable verbose diagnostics. Parse timings and session-start phase failures are written to `<agentdir>/epimetheus/debug.log` and mirrored to the console; auto-flush block notifications otherwise suppressed are shown. See [Debug Mode](#debug-mode). |
 
 ### Disabled Mode
+
 When `enabled: false`, epimetheus runs in a lightweight disabled mode. No tools, commands, API client, auto-recall, auto-retain, or status indicator are registered. However, two things are still handled:
 
 1. **Context filtering**: `hindsight-recall` custom messages are filtered from the LLM context, preventing stale recall messages from being sent to the model. This only matters for sessions where `autoRecallPersist` was enabled (the default is false) and those sessions are resumed.
@@ -76,6 +79,7 @@ When `enabled: false`, epimetheus runs in a lightweight disabled mode. No tools,
 This ensures that disabling the extension does not leave stale data in your sessions — recall messages are both filtered from the LLM context and properly rendered (or hidden) in the UI.
 
 **If you stop using Hindsight entirely** and have sessions with persisted recall entries, you have two options:
+
 1. Keep epimetheus installed with `enabled: false` (this disabled mode) — recall messages will continue to be filtered from context and rendered/hidden in the UI
 2. Uninstall epimetheus and manually remove all `hindsight-recall` entries from your session files — without the extension, `custom_message` entries would otherwise be sent to the LLM as regular user messages (`hindsight-meta` entries are safe to leave since they are `custom` entries, not messages, and won't appear in the LLM context)
 
@@ -132,11 +136,13 @@ Two settings control which session lifecycle events automatically flush pending 
 Both modes use the same flow: `before_agent_start` always performs recall and caches the result; the `context` handler then re-injects the cached recall as the configured role (`user` or `assistant`, per `autoRecallRole`).
 
 When `autoRecallPersist: true`:
+
 - Recall messages are also persisted to the session file as `custom_message` entries (visible in the TUI after restart)
 - The `context` handler filters out these persisted `hindsight-recall` entries from the LLM context, preventing old recall messages from being re-sent to the model
 - `autoRecallDisplay: true` can be used to show recall messages to the user in the TUI
 
 When `autoRecallPersist: false` (default):
+
 - Recall messages are ephemeral — sent to the LLM via the `context` handler but not persisted or displayed in the TUI
 - The most recent recall is available via `/hindsight popup`
 - `autoRecallDisplay: true` has no effect on new messages (memories are not stored and cannot be shown in chat) but still affects rendering of any previously persisted recall messages
@@ -144,13 +150,16 @@ When `autoRecallPersist: false` (default):
 If you stop using Hindsight and have sessions with persisted recall entries, you can keep epimetheus installed with `enabled: false` to continue filtering them from context, or manually remove them from session files. See [Disabled Mode](#disabled-mode) for details and the underlying pi limitation.
 
 ## Status Bar Indicator
+
 The extension shows a health indicator in pi's status bar:
+
 - 🧠 (healthy) — Config is valid with no warnings or errors
 - 🤯 (unhealthy) — Config has validation errors or load warnings
 
 Both indicator texts are configurable via `statusHealthy` and `statusUnhealthy` options. If `enabled: false`, no status indicator is shown (the extension runs in lightweight disabled mode).
 
 ## Session Retention Control
+
 Session retention has two config settings that serve distinct purposes:
 
 - **`retainSessionsByDefault`** (default: `true`) — determines the `retained` state for sessions that don't have metadata. When a session starts and has no hindsight metadata, a metadata entry is automatically created with `retained` set to this value.
@@ -174,6 +183,7 @@ The interaction between `autoRetainEnabled` and the session's `retained` state:
 When `autoRetainEnabled: false`, messages are never added to the auto-queue, so there is nothing to flush. The queue-flush handlers still run on switch/fork/shutdown (to drain any tool queue entries from agent `hindsight_retain` calls), but the auto-queue will always be empty. The `hindsight_retain` tool and manual parse/upsert commands are unaffected — they represent explicit user intent, not automatic behavior.
 
 Per-session control:
+
 - `/hindsight toggle-retain` — Toggle whether the current session should be retained
 - `/hindsight tag <tag>` — Add a tag to the session's metadata (included in document tags on flush)
 - `/hindsight remove-tag <tag>` — Remove a tag from the session's metadata
@@ -181,12 +191,14 @@ Per-session control:
 Current retain setting and tags can be viewed for the current session with `/hindsight status`.
 
 When a session does not allow retention:
+
 - Messages are not auto-queued on `message_end`
 - The `hindsight_retain` tool returns an error ("Session does not allow retention")
 - Auto-recall still works (read-only operation)
 - `/hindsight parse-session` and `/hindsight parse-and-upsert-session` are disabled
 
 When toggling retention:
+
 - **Off**: Queue files are deleted (queued messages will not be flushed). The existing document in Hindsight is not affected to avoid mistakes (manually delete it if you want to).
 - **On**: A confirmation dialog asks whether to parse and upsert the full session first. If confirmed, the entire conversation is retained as the document (so newly queued messages append correctly). If declined, retention is not enabled. Queue files are deleted regardless.
 
@@ -199,6 +211,7 @@ Session metadata (retention state, tags, and extra context) is stored as a `Cust
 **Extra context** is an optional caveat string appended to the Hindsight `context` field (after the session name), separated by a newline. It helps Hindsight correctly classify content during extraction — for example, indicating that a session involves taking notes on fiction or any content not written by the user.
 
 Extra context is used in all places the Hindsight context field is used:
+
 - **Fact extraction**: Included in the extraction prompt so the LLM knows the nature of the source
 - **Full-text search**: Indexed in the tsvector for recall filtering
 - **Consolidation**: Included in source fact data passed to the observation synthesis LLM
@@ -206,6 +219,7 @@ Extra context is used in all places the Hindsight context field is used:
 - **Reflect agent**: Available as context for answer synthesis
 
 There are two ways to set extra context:
+
 1. **Slash command**: `/hindsight set-extra-context This session involves reading Dune by Frank Herbert; characters are not the user`
 2. **Tool**: `hindsight_set_extra_context` — the LLM can set extra context directly (useful when the model recognizes the need or at the end of a session - ask model to summarize the overall session and provide necessary context to avoid out-of-context/incorrect memories)
 
@@ -230,10 +244,13 @@ This is particularly useful for sessions involving prose to prevent Hindsight fr
 The guard is checked at every session flush point in `autoFlushSessionOn`, `autoFlushPendingOn`, and for the manual slash commands (`/hindsight flush`, `/hindsight flush-pending`, and `/hindsight parse-and-upsert-session`). Tool queue flushes (from `hindsight_retain` tool calls) are not guarded.
 
 ## Content Retention & Stripping Settings
+
 ### `retainContent`
+
 Controls what content is retained to Hindsight per role:
 
 **Default:**
+
 ```json
 {
   "retainContent": {
@@ -249,11 +266,13 @@ Tool results are included by default. Exclude them if you *never* need to retain
 **Reconfigurable later**: If you decide you want to retain more or less content, you can update the `retainContent` config and future sessions will use the new settings. Note that changing settings requires reprocessing to update existing documents, which will also update their last use date.
 
 Can also be set via environment variable as a JSON string:
+
 ```bash
 export EPIMETHEUS_RETAIN_CONTENT='{"assistant":["text"],"user":["text"],"toolResult":[]}'
 ```
 
 **Example — Keep only user and assistant text messages (no tool calls/results):**
+
 ```json
 {
   "retainContent": {
@@ -265,12 +284,14 @@ export EPIMETHEUS_RETAIN_CONTENT='{"assistant":["text"],"user":["text"],"toolRes
 ```
 
 ### `strip`
+
 Controls which metadata fields are removed before queuing:
 
 - `topLevel`: Fields from the pi event entry (default: `type`, `id`, `parentId`)
 - `message`: Fields from inside the message object (default: `api`, `provider`, `model`, `usage`, `cost`, `stopReason`, `timestamp`, `responseId`)
 
 **Default:**
+
 ```json
 {
   "strip": {
@@ -281,11 +302,13 @@ Controls which metadata fields are removed before queuing:
 ```
 
 Can also be set via environment variable as a JSON string:
+
 ```bash
 export EPIMETHEUS_STRIP='{"topLevel":[],"message":["toolCallId"]}'
 ```
 
 **Example — Include tool results, strip toolCallId:**
+
 ```json
 {
   "retainContent": {
@@ -301,11 +324,13 @@ export EPIMETHEUS_STRIP='{"topLevel":[],"message":["toolCallId"]}'
 ```
 
 ### `toolFilter`
+
 Filters tool calls and tool results by tool name. Uses `include` (whitelist) or `exclude` (blacklist) per category — these are mutually exclusive within each category.
 
 Only applies when `toolCall` is in `retainContent.assistant` or `toolResult` is in `retainContent.toolResult` respectively.
 
 **Default** (conservative; still retains any potentially useful information while reducing unnecessary tokens):
+
 ```json
 {
   "toolFilter": {
@@ -320,6 +345,7 @@ The default excludes tool calls where you typically only care about the result (
 **Examples:**
 
 Retain `read` results but not calls (to have file contents in memory):
+
 ```json
 {
   "toolFilter": {
@@ -330,6 +356,7 @@ Retain `read` results but not calls (to have file contents in memory):
 ```
 
 No tool filtering (retain everything):
+
 ```json
 {
   "toolFilter": {}
@@ -337,18 +364,22 @@ No tool filtering (retain everything):
 ```
 
 Can also be set via environment variable as a JSON string:
+
 ```bash
 export EPIMETHEUS_TOOL_FILTER='{"toolCall":{"exclude":["bash"]},"toolResult":{"include":["read"]}}'
 ```
 
 ### `entities`
+
 Optional entities to pass to every retain call. Useful for tagging known entities in your content.
 
 Each entity has:
+
 - `text`: The entity name/text (e.g., "John")
 - `type`: Optional entity type (e.g., "PERSON", "ORG", "CONCEPT")
 
 Example:
+
 ```json
 {
   "entities": [
@@ -359,12 +390,15 @@ Example:
 ```
 
 Or via environment variable as a JSON string:
+
 ```bash
 export EPIMETHEUS_ENTITIES='[{"text":"John","type":"PERSON"}]'
 ```
 
 ### `observationScopes`
+
 #### What Observation Scopes Are
+
 Controls how observations are scoped during consolidation. **Required** — the default of `null` is invalid and will produce a validation error; you must explicitly set this to a preset or custom scope groups.
 
 The automatic `session:`, `parent:`, and `cwd:` tags added during retention make observation scopes important for controlling how observations are consolidated across sessions.
@@ -372,6 +406,7 @@ The automatic `session:`, `parent:`, and `cwd:` tags added during retention make
 Using custom scope groups is recommended. Most users should combine a per-user scope with a per-directory scope.
 
 **Hindsight Presets:**
+
 - `"combined"` — A single pass with all tags together (Hindsight default, not recommended)
 - `"shared"` — single pass over one global, untagged scope (all memories consolidate together)
 - `"per_tag"` — One consolidation pass per individual tag, creating separate observations for each tag
@@ -380,6 +415,7 @@ Using custom scope groups is recommended. Most users should combine a per-user s
 **Custom scope groups:** An array of tag arrays, where each inner array defines a group of tags for one consolidation pass. This is recommended as it gives full control over which tag combinations produce separate observations.
 
 #### Placeholder Expansion
+
 In custom scope groups, the following placeholders expand at retain time:
 
 | Placeholder | Expands to | Description |
@@ -393,6 +429,7 @@ In custom scope groups, the following placeholders expand at retain time:
 Placeholders must be used as standalone tags — e.g. `["{session}"]` not `["{session}:extra"]`. Non-exact placeholder usage will produce a config warning.
 
 #### Choosing array scopes
+
 The simple way to think about this is that your observation scopes list should have an entry for any tag combination you will later want to filter observations by. Most users will want global and per-project observations.
 
 - **Per-user** (`["user:<me>"]`) — facts that span all your personal sessions/documents and memories. Add `"user:<me>"` to `constantTags` and use it as a scope.
@@ -403,8 +440,8 @@ The simple way to think about this is that your observation scopes list should h
 - **Per-basedir** (`["{basedir}"]`) — facts scoped by directory name (basename). Less precise than `{cwd}` but works across different parent paths with the same directory name. Not likely to be useful over `{project}`.
 - **Per-harness** (`["harness:pi"]`) — facts that span all pi sessions (included as a default constant tag)
 
-
 Recommended example — Global scope plus per-project scope:
+
 ```jsonc
 {
   "constantTags": ["harness:pi", "user:<me>"],
@@ -422,6 +459,7 @@ Recommended example — Global scope plus per-project scope:
 ```
 
 This creates two consolidation passes:
+
 1. One for facts that span all your sessions (even across different harnesses, assuming you've also tagged those documents with `user:<me>`)
 2. One for facts specific to the current project (identified by project-local config when used, otherwise git common-dir name or cwd basename)
 
@@ -444,6 +482,7 @@ Use [project-local settings](#project-local-settings) when the derived project n
 ```
 
 **When to use `{project}` vs. `{cwd}` vs. `{basedir}`:**
+
 - `{project}` (recommended) — Observations scoped by project name (git common-dir name when available, otherwise cwd basename). Use project-local config `projectName` to override the retained project identity for a project.
 - `{cwd}` — Use when you want observations tied to an exact directory path. Different directories with the same basename produce separate observations.
 - `{basedir}` — Use when you want observations grouped by directory name regardless of parent path. All directories named `myapp` share observations.
@@ -453,6 +492,7 @@ Use [project-local settings](#project-local-settings) when the derived project n
 > The `cwd:` tag and `{cwd}`/`{basedir}`/`{project}` placeholders use the session's cwd from the session header — the directory the session was first created in.
 
 Full example with all available scopes:
+
 ```jsonc
 {
   "constantTags": ["harness:pi", "user:<me>"],
@@ -469,6 +509,7 @@ Full example with all available scopes:
 ```
 
 Or via environment variable as a JSON string:
+
 ```bash
 export EPIMETHEUS_OBSERVATION_SCOPES='[["{session}","user:alice"],["project:foo"]]'
 ```
@@ -514,9 +555,11 @@ When a session is started in or resumed from a directory that contains a project
 `/hindsight detach-project-name` stops the current session from requiring the cwd-local `projectName`. Use this if you no longer want to override the project name for a session (e.g. the resolution algorithm handles a new VCS it did not handle before and the config is no longer necessary).
 
 ### autoRecallTags
+
 Tags to filter by during auto-recall. When set, only memories matching these tags will be recalled. Supports the same placeholder expansion as observation scopes (`{session}`, `{parent}`, `{cwd}`, `{basedir}`, `{project}`), expanded at recall time using the current session context.
 
 **`autoRecallTagsMatch`** controls how tags are matched:
+
 - `"any"` (default) — OR logic, includes untagged memories. A memory with *any* matching tag is returned.
 - `"all"` — AND logic, includes untagged memories. A memory must have *all* specified tags.
 - `"any_strict"` — OR logic, **excludes** untagged memories. Only returns memories that actually have a matching tag.
@@ -530,6 +573,7 @@ When `autoRecallTags` is `null` (default), no tag filtering is applied and `auto
 Supports the same placeholder expansion as `observationScopes`, expanded at recall time using the current session context.
 
 **Example — Project-scoped recall:**
+
 ```jsonc
 {
   "autoRecallTags": ["{project}"],
@@ -538,6 +582,7 @@ Supports the same placeholder expansion as `observationScopes`, expanded at reca
 ```
 
 **Example — Project-scoped recall excluding current session:**
+
 ```jsonc
 {
   "autoRecallTagGroups": [
@@ -558,7 +603,9 @@ Your `autoRecallTags` configuration depends on which `autoRecallTypes` you use:
 - **`autoRecallTypes: ["world", "experience"]`**: World/experience memories are tagged based on all tags from the document they were extracted from, so your observation scopes do not matter.
 
 ### Project-specific Recall and Storage
+
 By combining `autoRecallTags` and `observationScopes`, you can create project-specific memory that's both stored and recalled per-project:
+
 ```jsonc
 {
   "constantTags": ["harness:pi", "user:<me>"],
@@ -572,10 +619,12 @@ By combining `autoRecallTags` and `observationScopes`, you can create project-sp
 ```
 
 With this configuration:
+
 - **Retention**: Observations are consolidated per-user (global) and per-project
 - **Recall**: Only memories tagged with the current project name are recalled
 
 If you need backward compatibility with old memories stored under `cwd:` tags where the directory has changed, add the legacy tags via the `EPIMETHEUS_AUTO_RECALL_TAGS` env var per-directory (not in config.json, which is shared across all projects):
+
 ```envrc
 # In .env per project directory (loaded by direnv or mise):
 # Supports old memories from a project that has changed directories *and* been renamed
@@ -585,6 +634,7 @@ EPIMETHEUS_AUTO_RECALL_TAGS_MATCH=any_strict
 ```
 
 ## Environment Variables
+
 Configuration options can also be set via environment variables (override config file). This can be used to use different configurations for different wrapper scripts or for different directories by using [mise](https://mise.jdx.dev/installing-mise.html) or [direnv](https://direnv.net/).
 
 <details>
@@ -627,10 +677,13 @@ Configuration options can also be set via environment variables (override config
 | `EPIMETHEUS_STATUS_HEALTHY` | `statusHealthy` | string | `"🧠"` |
 | `EPIMETHEUS_STATUS_UNHEALTHY` | `statusUnhealthy` | string | `"🤯"` |
 | `EPIMETHEUS_DEBUG` | `debug` | boolean | `false` |
+
 </details>
 
 # Additional Details
+
 ## Memory Fencing
+
 Recalled memories are injected as a proper `user` or `assistant` role message (configurable via `autoRecallRole`), with the content wrapped in `<hindsight_memories>` fences. The fence and preamble provide additional instructions inside the content. This format is inspired by [Hermes](https://github.com/nousresearch/hermes-agent).
 
 Example of injected content (with `autoRecallRole: "user"` - default):
@@ -652,6 +705,7 @@ The fencing helps prevent the LLM from confusing recalled context with the curre
 The `recallPromptPreamble` config option (shown inside the fence above) defaults to the combined Hermes/Hindsight system note wording. You can customize this text to change the instructions given to the LLM about how to use recalled memories.
 
 ## Failure Modes
+
 | Scenario | Behavior |
 |----------|----------|
 | Retain fails on shutdown | Queue remains on disk for manual flush via `/hindsight flush` |
@@ -660,6 +714,7 @@ The `recallPromptPreamble` config option (shown inside the fence above) defaults
 | Queue file corruption | Skip malformed lines on read (partial data loss) |
 
 # Tools
+
 When `toolsEnabled: true` (default), all tools are available. Set to an array of tool names (`"retain"`, `"recall"`, `"reflect"`, `"set_extra_context"`, `"get_extra_context"`) to register only specific tools, or `false` to disable all tools.
 
 | Tool | Description |
@@ -671,6 +726,7 @@ When `toolsEnabled: true` (default), all tools are available. Set to an array of
 | `hindsight_get_extra_context` | Get the current extra context set for this session. |
 
 # Slash Commands
+
 All commands are under `/hindsight <subcommand>`. With no subcommand, defaults to `status`.
 
 | Subcommand | Description |
@@ -699,15 +755,19 @@ All commands are under `/hindsight <subcommand>`. With no subcommand, defaults t
 Epimetheus reserves these exact tool names: `hindsight_set_extra_context`, `hindsight_get_extra_context`, `hindsight_retain`, `hindsight_recall`, and `hindsight_reflect`. Its visibility manager may hide these names in degraded mode or according to retention settings. Extensions that register a tool with one of the same exact names are incompatible, even when the corresponding Epimetheus tool is disabled through `toolsEnabled`. Tools that merely share the `hindsight_` prefix but use another name are preserved.
 
 ## subagents
+
 You should check how your subagent plugin interacts with sessions. If it writes to a separate session, and you do not want memories stored for subagents, you should disable epimetheus for subagents. A good subagent plugin should allow disabling or configuring extensions per-agent.
 
 Edxeth's pi-subagents plugin injects `custom_message` entries via `before_agent_start` (subagent roster) and `sendMessage` (subagent results). These are converted to user-role messages by pi's `convertToLlm`. Since pi-subagents does not use the `context` event, its messages appear before epimetheus' recall injection, so the ordering (user prompt → roster/result as user → recall as assistant) is typically fine. However, if other extensions inject messages via the `context` event, injection order cannot be controlled and mixed roles after the user prompt may confuse the LLM. Consider setting `autoRecallRole: "user"` if this becomes an issue.
 
 ## pi-link
+
 [pi-link](https://github.com/alvivar/pi-link) sends user messages to agents. These have a clear disclaimer in them, but if you have issues with misattribution, you can try including something like this in your retain mission: `"role":"user" messages that start with [Remote prompt from "<name>"] are from another agent <name> *not* the user`.
 
 ## rewind/rollback
+
 Rollback with checkpoint extensions is untested. It may require code changes to include rollback information/messages. I think it makes sense to include the rollback information in memories (what happened? why was it necessary?), so I won't support actually removing messages from before the rollback in the final ingested document.
 
 ## packages that also use pi.on("context")
+
 Unknown. I'm not sure how this will interact with something like pi-headrom. It needs investigation.

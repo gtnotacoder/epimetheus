@@ -68,6 +68,7 @@
 - **Plugin-specific env vars renamed `PI_HINDSIGHT_*` → `EPIMETHEUS_*`** — The preferred env-var prefix is now `EPIMETHEUS_*`; the old `PI_HINDSIGHT_*` names still work as backward-compatible fallbacks (used only when the new name is unset). The official Hindsight service vars `HINDSIGHT_API_URL` and `HINDSIGHT_API_KEY` are unchanged. `/hindsight config` lists whichever env var was actually used.
 
 User notes:
+
 - Any major issues are unlikely, but it is still recommended to stop all Pi before the first launch of this version
 - After verifying the migration, you may remove the old `extensions/pi-hindsight` directory.
 - Slash command (`/hindsight`), tool names (`hindsight_*`), and the `hindsight-recall` message type are unchanged. The official Hindsight service vars `HINDSIGHT_API_URL` and `HINDSIGHT_API_KEY` are also unchanged. Plugin-specific env vars moved from `PI_HINDSIGHT_*` to `EPIMETHEUS_*`, but the old env vars are supported as fallbacks. The package/workspace name itself was renamed `pi-hindsight` → `epimetheus`.
@@ -114,6 +115,7 @@ User notes:
 - **`/quit` now flushes all pending sessions by default** — Previously `/quit` only flushed the current active session. With the new default `autoFlushPendingOn: ["quit"]`, `/quit` now runs the flush-pending flow across all sessions with pending markers/tool queues, with warning/error notifications mirrored to the console. To restore the old active-session-only `/quit` behavior, set `autoFlushPendingOn: []` and add `"quit"` to `autoFlushSessionOn`.
 
 User note:
+
 - Please flush before updating if you have un-ingested memories from `hindsight_retain` tool calls.
 - Old parsed-session artifacts are not migrated. Re-parse and ingest sessions you want rechunked to avoid message splitting. Note that old sessions ingested with `parse-and-upsert-session` are already chunked to avoid message splitting.
 

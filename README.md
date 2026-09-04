@@ -11,12 +11,14 @@ Status: I would call this beta level software, though I am using it daily and am
 If you want to skip ahead and just try it without background information, see [Quickstart](#quickstart).
 
 # Immediate Roadmap
+
 - Slash command to sync bank configs from disk for agent or manual editing - Almost done
 - Basic setup wizard and then agent-driven setup for more personalized/advanced configuration (make an issue if you are interested in testing once this is available or have any feedback)
 - I have some more ideas for potential client-side improvements for extraction quality, though I think more changes are needed in hindsight proper
 - More advanced/experimental functionality - background reflection, automatic injection of mental models (right now can do manually with prompts), parallel memory support agents, and other strange ideas I want to test that may or may not be useful
 
 # Table of Contents
+
 - [Why Hindsight?](#why-hindsight)
 - [Extension Key Features](#extension-key-features)
   - [Retain Memories](#retain-memories)
@@ -36,6 +38,7 @@ See [Architecture](docs/architecture/ingestion.md) and [Config Architecture](doc
 See [Comparison](docs/comparison.md) for how this plugin compares to others and the design decisions behind it.
 
 # Why Hindsight?
+
 Memory systems are still nowhere near perfect. If something better comes along I will switch, but in the never-ending sea of new memory systems, I think hindsight continues to stand out for the following reasons:
 
 - Versatile, can support a wide variety of use cases (both simple and very complex)
@@ -55,9 +58,11 @@ Memory systems are still nowhere near perfect. If something better comes along I
 There are still tradeoffs, which I'm also trying to address as much as can be on the client side in this extension.
 
 # Extension Key Features
+
 Ambient and manual retain/recall are enabled by default, and automatic behavior and individual tools can be disabled independently.
 
 Other key capabilities:
+
 - Disk-backed automatic retention and past-session ingestion
 - Auto-recall with ephemeral injection or optional persisted display
 - Manual reflect tool for synthesized answers and mental-model workflows
@@ -68,22 +73,27 @@ Other key capabilities:
 See [Comparison with Other Implementations](docs/comparison.md) and [Design Decisions](docs/comparison.md#design-decisions) for more information on what differentiates this plugin.
 
 ## Retain Memories
+
 - Automatically retains session content on session switch, shutdown, etc.
 - Also supports ingesting past sessions - any session that has ever existed can be synced to Hindsight, not just sessions that had the extension loaded
 
 ## Auto-Recall Memories
+
 When enabled, relevant memories are automatically recalled before each LLM call. Recall is injected as the configured role (`user` or `assistant`) with content wrapped in `<hindsight_memories>` fences.
 
 There are two modes:
+
 1. Ephemerally inject memories (default) — not stored in session file, can only see most recent recall via `/hindsight popup`
 2. Store memories in session file — allows displaying collapsible blocks with all past recall
 
 For mode tradeoffs, cleanup options, and all auto-recall settings, see [Auto-Recall Settings](docs/reference.md#auto-recall-settings) and [autoRecallPersist Tradeoffs](docs/reference.md#autorecallpersist-tradeoffs).
 
 ## Reflect
+
 Unlike recall which returns raw matching memories, reflect uses the bank's reflect mission, disposition, and multi-step reasoning to produce a synthesized answer. Best for questions requiring synthesis of multiple memories or deeper analysis. Available as the `hindsight_reflect` tool (see [Tools](docs/reference.md#tools)).
 
 Example reflect queries:
+
 - "What are the user's development preferences?"
 - "What architectural decisions have been made for this project?"
 - "Summarize what went wrong with the last deployment"
@@ -91,13 +101,16 @@ Example reflect queries:
 You can set up [mental models](https://hindsight.vectorize.io/developer/api/mental-models) — cached reflect queries that can optionally automatically update when new observations come in — for common reflect queries. You can also use a pi prompt file to seed useful reflect queries at any point during a session.
 
 # Philosophy
+
 Follow [hindsight best practices](https://hindsight.vectorize.io/best-practices):
+
 - Retains messages as JSONL, which hindsight can intelligently chunk
 - Retains all data for the same session with the same `document_id`
 - Uses manually set session name (preserved as-is) or truncated first message as `context` field, optionally with extra user-set context/extraction caveats
 - Sets the `timestamp` field to the session start time
 
 Additionally:
+
 - Recalls memories for the current user prompt, unlike [hermes which is currently one turn behind](https://github.com/NousResearch/hermes-agent/issues/5820)
 - Supports ingesting past sessions — any session that has ever existed can be synced to Hindsight, not just sessions that had the extension loaded.
 - Avoids breaking prompt caching - recall messages are appended at the end of the context for a single turn only; the canonical conversation history (which determines cache validity) grows normally with each turn, so caching should work as expected
@@ -107,6 +120,7 @@ Additionally:
 - Allows choosing what content to retain and stripping unnecessary fields to reduce tokens/cost
 
 # Quickstart
+
 It is recommended to install the extension through npm to get a stable version and to pin to a specific tag. When updating it is recommend to check (or have your agent check) the changelog for any breaking changes.
 
 ```bash
@@ -120,26 +134,31 @@ It is recommended to use the latest version of hindsight, and this extension enf
 If you want to run hindsight on your own server or using [hindsight cloud](https://ui.hindsight.vectorize.io/signup), ignore the hindsight-embed commands. `uvx` is the only needed dependency if you don't plan on running it with docker or on a separate server.
 
 Create a profile (will output the env config location):
+
 ```bash
 uvx hindsight-embed@latest profile create <name> --port <e.g. 9100>
 ```
 
 Configure API key (or manually configure env file as below) before creating bank:
+
 ```bash
 uvx hindsight-embed -p <profile name> configure
 ```
 
 Create a bank:
+
 ```bash
 uvx hindsight-embed@latest -p <profile name> bank create <e.g. default>
 ```
 
 Start the UI (automatically starts the daemon, will show dashboard url):
+
 ```bash
 uvx hindsight-embed@latest -p <profile name> ui start
 ```
 
 You can set any environment variables you want in `~/.hindsight/profiles/<profile>.env` (see the [full config reference](https://hindsight.vectorize.io/developer/configuration) for all available settings):
+
 ```env
 # if you want the daemon to remain running (required for this pi extension), you
 # either need to create a service or set this variable to 0; otherwise when run
@@ -165,9 +184,11 @@ You can customize your retain, observation, and reflect missions in the UI (as w
 Create `~/.pi/agent/epimetheus/config.jsonc` — see the [Example Configuration](#example-configuration) below.
 
 # Configuration
+
 Configuration is stored in `<getAgentDir()>/epimetheus/config.json` or `config.jsonc` (JSONC has precedence). See the [Reference](docs/reference.md) for detailed documentation of all settings.
 
 ## Example Configuration
+
 ```jsonc
 {
   "apiUrl": "http://127.0.0.1:9100",
@@ -215,12 +236,15 @@ Configuration is stored in `<getAgentDir()>/epimetheus/config.json` or `config.j
 ```
 
 # Project-local Settings
+
 Project-local settings live under a project cwd instead of the global epimetheus config. Currently, the only supported project-local setting is a `projectName` override used for project-scoped flushing and auto-recall. See [Project-local Settings](docs/reference.md#project-local-settings) for more details.
 
 If you need other project-local settings, please open an issue describing the setting and why it needs to vary by project.
 
 # Recommended User Best Practices
+
 ## Initially
+
 - See the [model leaderboard](https://benchmarks.hindsight.vectorize.io/) for information on what models to use. I am currently using gemma 4 31b for retention/consolidation.
 - Think about your [retain mission](https://hindsight.vectorize.io/developer/api/memory-banks#retain-configuration), [observations mission](https://hindsight.vectorize.io/developer/api/memory-banks#observations_mission), and [entity labels](https://hindsight.vectorize.io/developer/api/memory-banks#entity-labels) up front. While the hindsight defaults are good for general use cases, you may want to be more specific, and if you change these later and want them to affect old sessions, you will need to reprocess old documents.
 - Configure your [observation scopes](docs/reference.md#observationscopes) to control how observations are consolidated across sessions.
@@ -230,20 +254,24 @@ If you need other project-local settings, please open an issue describing the se
 - If you are getting incorrect memories extracted (e.g. other people conflated with the user), consider [setting extra context](docs/reference.md#extra-context--flush-guard) for sessions; this is especially useful for non-programming sessions
 
 Example - For the retain mission, you may want to experiment with including something like this to avoid retaining duplicate information that may end up in the LLM thinking or final output after recall/reflect:
+
 - "Ignore resurfaced information that has already been stored or meta-commentary about it (unless the commentary is a new realization, surprise, correction, or new connection; in that case retain only the new commentary)"
 - "Ignore tool read/write/edit calls and results for files in /path/to/notes/" (e.g., you use pi exclusively for some notes or journals and the notes contain no new content)
 
 ## Later
+
 - Remember that the recall prompt is constructed from the first part of your user message. For long prompts, consider putting any details or keywords you want memories for towards the beginning.
 - Set up [mental models](https://hindsight.vectorize.io/developer/api/mental-models) for common reflect queries
 - Consider your [reflect mission](https://hindsight.vectorize.io/developer/api/memory-banks#reflect_mission) and [bank disposition](https://hindsight.vectorize.io/developer/reflect#disposition-shapes-reasoning) for reflect
 
 # Caveats
+
 - While I am avoiding breaking changes, this plugin is still in flux, and the config API may evolve. I recommend locking to a tag.
 - Depending on your workflow with `/tree` and what you expect to be retained, this package may not play well (all new messages and session file content will be retained, not just the current tree branch). Also see [rewind/rollback information in Known Package Interactions](docs/reference.md#rewindrollback).
 - Flush options are manual, or automatic on session lifecycle events (`switch`, `fork`, `reload`, `compact`, `quit`); see [Reference](docs/reference.md#auto-flush-events) for `autoFlushSessionOn` and `autoFlushPendingOn`.
 
 # FAQ
+
 ## Why did you make this when there is already a pi-hindsight?
 
 See [Comparison with Other Implementations](docs/comparison.md) for a detailed feature comparison and [Design Decisions](docs/comparison.md#design-decisions) for the reasoning behind this plugin's approach.
@@ -257,6 +285,7 @@ I made this before there were any other pi plugins. When I found [anh-chu/pi-hin
 - More configuration options and can use both a config file and/or environment variables for specific directories with mise or direnv
 
 When I found it, it also did some strange things like:
+
 - Using the API directly instead of the official typescript library
 - Stripping `<hindsight_memories>` text blocks instead of just totally filtering out recall custom messages or using ephemeral injection in `pi.on("context")`
 
@@ -265,6 +294,7 @@ I also want to make 100% sure I have something following hindsight's best practi
 I may try out other memory providers in the future, and in that case, I will also be able to extract a lot the code here into a shared library for dealing with message stripping and parsing old session files.
 
 ## Was this vibe coded?
+
 Partially. The repo (excluding the documentation) was 100% written by AI but with manual review. The actual design/architecture is by me based on the documented hindsight best practices, discussions with the hindsight author, and looking how multiple other memory systems are integrated in pi and other harnesses.
 
 I went through many rounds of manual review and bug fixes for the initial code along with manual testing, especially for the session parsing, queuing, retention, and injection parts. This included manually reviewing that my parsed session and queue files were stripped correctly (and the duplicated head removed for forks) and retained with the correct tags, context, etc. I have reingested all my session files into hindsight multiple times as I've experimented with different retain/observation missions.
@@ -276,6 +306,6 @@ The automated tests have not been reviewed properly. I'm sure there are also bug
 Long term, I plan to focus on ensuring this extension is robust and bug-free (*more manual re-review is currently needed*). The primary reason I am making this extension myself is to make sure every aspect works correctly after finding issues with a lot of integrations for other memory systems or harnesses. Correctness matters too much for memory to not review the code (at least in the current month).
 
 ## Why did you subject me to more greek god naming?
+
 - There were several extensions with the same name
 - I couldn't resist the pun
-
