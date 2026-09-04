@@ -166,6 +166,29 @@ export function resetRegisteredHindsightTools(): void {
 }
 
 /**
+ * Count of auto-recall degraded fallbacks this session: first-attempt recall
+ * timeouts that triggered the cheap-mode retry. Incremented regardless of the
+ * retry outcome so a still-failing recall remains visible in /hindsight status
+ * instead of silently recalling nothing.
+ */
+let degradedRecallCount = 0;
+
+/** Number of degraded recall fallbacks triggered this session. */
+export function getDegradedRecallCount(): number {
+  return degradedRecallCount;
+}
+
+/** Record a degraded recall fallback (first-attempt recall timeout). */
+export function incrementDegradedRecallCount(): void {
+  degradedRecallCount += 1;
+}
+
+/** Reset the degraded-recall counter. Exported for testing/reset only. */
+export function resetDegradedRecallCount(): void {
+  degradedRecallCount = 0;
+}
+
+/**
  * Reset every runtime-state slot to its initial value. Called at the top of
  * each extension-factory invocation (`default(pi)`) so a freshly constructed
  * extension instance never claims a registration/readiness/degraded reason
@@ -179,6 +202,7 @@ export function resetRuntimeState(): void {
   resetActiveSessionProjectReady();
   resetRegisteredHindsightTools();
   resetDegradedReason();
+  resetDegradedRecallCount();
 }
 
 export const DEGRADED_REASON_PENDING = "startup readiness has not completed yet";

@@ -9,7 +9,12 @@ import type { RecallMessageDetails } from "../index";
 import { getHindsightMeta, shouldSessionBeRetained } from "../meta";
 import { findProjectConfigFile, resolveProjectConfig, resolveProjectName } from "../project-config";
 import { getPendingWorkCount } from "../retention";
-import { DEGRADED_REASON_PENDING, getDegradedReason, isOperationalReady } from "../runtime-state";
+import {
+  DEGRADED_REASON_PENDING,
+  getDegradedReason,
+  getDegradedRecallCount,
+  isOperationalReady,
+} from "../runtime-state";
 import { getHindsightCompatibilityError, MIN_HINDSIGHT_VERSION } from "../version";
 import type { Subcommand } from "./types";
 
@@ -131,6 +136,8 @@ export function createStatusSubcommand(
       lines.push(`  Display: ${config.autoRecallDisplay}`);
       lines.push(`  Types: ${config.autoRecallTypes ? config.autoRecallTypes.join(", ") : "all"}`);
       lines.push(`  Budget: ${config.autoRecallBudget}`);
+      lines.push(`  Timeout: ${config.recallTimeoutMs}ms`);
+      lines.push(`  Degraded recall fallbacks: ${getDegradedRecallCount()}`);
 
       ctx.ui.notify(lines.join("\n"), "info");
     },

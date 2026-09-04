@@ -9,7 +9,9 @@ import type { HindsightClientWrapper } from "../src/client";
 import { registerCommands } from "../src/commands";
 import type { RecallMessageDetails } from "../src/index";
 import {
+  incrementDegradedRecallCount,
   markStartupReady,
+  resetDegradedRecallCount,
   resetRegisteredHindsightTools,
   resetStartupReady,
   setRegisteredHindsightTools,
@@ -347,6 +349,22 @@ describe("registerCommands", () => {
       await getHandler()("status", makeCtx());
       expect(lastNotification?.message).toContain("Auto-recall: disabled");
       expect(lastNotification?.message).toContain("Auto-retain: disabled");
+    });
+
+    it("shows the configured recall timeout and degraded fallback count", async () => {
+      resetDegradedRecallCount();
+      register();
+      await getHandler()("status", makeCtx());
+      expect(lastNotification?.message).toContain("Timeout: 30000ms");
+      expect(lastNotification?.message).toContain("Degraded recall fallbacks: 0");
+    });
+
+    it("shows the incremented degraded fallback count", async () => {
+      resetDegradedRecallCount();
+      register();
+      incrementDegradedRecallCount();
+      await getHandler()("status", makeCtx());
+      expect(lastNotification?.message).toContain("Degraded recall fallbacks: 1");
     });
 
     it("does not append '...' when snippet is exactly 60 chars", async () => {

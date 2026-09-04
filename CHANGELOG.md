@@ -1,5 +1,11 @@
 # Changelog
 
+## Pending
+
+### Fixed
+
+- **Auto-recall silently failing on slow banks** — recall had a hard-coded 10s timeout, but recall against large banks can take 8-30s, so auto-recall timed out and injected nothing every turn. The timeout is now configurable via `recallTimeoutMs` (default 30000ms, env `EPIMETHEUS_RECALL_TIMEOUT_MS`). On timeout, auto-recall retries once with a faster degraded retrieval (low budget, reduced max tokens, 5s ceiling) and injects the best-effort results with a one-line degradation note, so a slow bank degrades gracefully instead of silently recalling nothing. `/hindsight status` now shows the configured timeout and the session's degraded-fallback count. The `hindsight_recall` tool inherits the same configurable timeout (previously 10s). Known tradeoff: a timed-out auto-recall can delay a turn by up to ~35s (30s first attempt + 5s degraded retry) when the bank is too slow for both.
+
 ## 0.6.1
 
 ### Fixed

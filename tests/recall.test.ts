@@ -14,6 +14,7 @@ import type { HindsightConfig, TagsMatch } from "../src/config";
 import type { AutoRecallConfig, RecallClient, RecallMessageDetails } from "../src/index";
 import { doAutoRecallImpl, formatRecallMessage } from "../src/index";
 import { RecallOverlayComponent } from "../src/overlay";
+import { getDegradedRecallCount, resetDegradedRecallCount } from "../src/runtime-state";
 import { testConfig } from "./fixtures";
 
 // Default preamble - the combined Hermes/Hindsight system note
@@ -754,6 +755,8 @@ describe("doAutoRecallImpl", () => {
     autoRecallTags: null,
     autoRecallTagsMatch: "any",
     autoRecallTagGroups: null,
+    recallTimeoutMs: 30000,
+    maxRecallTokens: null,
   };
 
   // Create a mock AbortSignal
@@ -830,6 +833,220 @@ describe("doAutoRecallImpl", () => {
 
       expect(result).toBeNull();
       expect(cachedDetails).toBeNull();
+    });
+  });
+
+  describe("degraded fallback on timeout", () => {
+    beforeEach(() => {
+      resetDegradedRecallCount();
+    });
+
+    it("retries once with a faster low-budget retrieval and injects best-effort results with a degradation note", async () => {
+      const calls: Array<{
+        options: Parameters<RecallClient["recall"]>[0];
+        timeoutMs?: number;
+      }> = [];
+      const mockClient: RecallClient = {
+        recall: async (options, _signal, timeoutMs) => {
+          calls.push({ options, timeoutMs });
+          if (calls.length === 1) {
+            return {
+              success: false,
+              error: "Operation timed out after 30000ms",
+              timedOut: true,
+            };
+          }
+          return {
+            success: true,
+            response: { results: [{ id: "1", text: "Best-effort memory" }] },
+          };
+        },
+      };
+      let cachedDetails: RecallMessageDetails | null = {
+        count: 0,
+        snippet: "",
+        memories: "",
+      };
+
+      const result = await doAutoRecallImpl(
+        mockClient,
+        "test query",
+        mockSignal,
+        false,
+        defaultConfig,
+        (details) => {
+          cachedDetails = details;
+        }
+      );
+
+      expect(result).not.toBeNull();
+      expect(calls).toHaveLength(2);
+      // First attempt uses the configured timeout (root-cause fix)
+      expect(calls[0]!.timeoutMs).toBe(defaultConfig.recallTimeoutMs);
+      // Degraded retry uses a faster low-budget retrieval with a short ceiling
+      expect(calls[1]!.timeoutMs).toBe(5000);
+      expect(calls[1]!.options.budget).toBe("low");
+      expect(calls[1]!.options.maxTokens).toBe(1024);
+      // Best-effort results are injected with a one-line degradation note
+      expect(result!.recallMessage.content).toContain("Best-effort memory");
+      expect(result!.recallMessage.content).toContain("degraded");
+      expect(cachedDetails?.count).toBe(1);
+      // The fallback is counted for /hindsight status
+      expect(getDegradedRecallCount()).toBe(1);
+    });
+
+    it("returns null when the degraded retry also fails", async () => {
+      const mockClient: RecallClient = {
+        recall: async () => ({
+          success: false,
+          error: "Operation timed out after 5000ms",
+          timedOut: true,
+        }),
+      };
+      let cachedDetails: RecallMessageDetails | null = {
+        count: 1,
+        snippet: "prev",
+        memories: "prev",
+      };
+
+      const result = await doAutoRecallImpl(
+        mockClient,
+        "test query",
+        mockSignal,
+        false,
+        defaultConfig,
+        (details) => {
+          cachedDetails = details;
+        }
+      );
+
+      expect(result).toBeNull();
+      expect(cachedDetails).toBeNull();
+      // The fallback is still counted so a failing recall stays visible in status
+      expect(getDegradedRecallCount()).toBe(1);
+    });
+
+    it("does not retry on non-timeout errors", async () => {
+      let callCount = 0;
+      const mockClient: RecallClient = {
+        recall: async () => {
+          callCount += 1;
+          return { success: false, error: "API rate limit exceeded" };
+        },
+      };
+
+      const result = await doAutoRecallImpl(
+        mockClient,
+        "test query",
+        mockSignal,
+        false,
+        defaultConfig,
+        () => {}
+      );
+
+      expect(result).toBeNull();
+      expect(callCount).toBe(1);
+      expect(getDegradedRecallCount()).toBe(0);
+    });
+
+    it("does not retry or annotate when recall succeeds within the timeout", async () => {
+      let callCount = 0;
+      const mockClient: RecallClient = {
+        recall: async () => {
+          callCount += 1;
+          return {
+            success: true,
+            response: { results: [{ id: "1", text: "Normal memory" }] },
+          };
+        },
+      };
+
+      const result = await doAutoRecallImpl(
+        mockClient,
+        "test query",
+        mockSignal,
+        false,
+        defaultConfig,
+        () => {}
+      );
+
+      expect(result).not.toBeNull();
+      expect(callCount).toBe(1);
+      expect(result!.recallMessage.content).toContain("Normal memory");
+      expect(result!.recallMessage.content).not.toContain("degraded");
+      expect(getDegradedRecallCount()).toBe(0);
+    });
+
+    it("caps the degraded retry maxTokens at 1024 when more is configured", async () => {
+      const calls: Array<Parameters<RecallClient["recall"]>[0]> = [];
+      const mockClient: RecallClient = {
+        recall: async (options) => {
+          calls.push(options);
+          if (calls.length === 1) {
+            return { success: false, error: "Operation timed out", timedOut: true };
+          }
+          return { success: true, response: { results: [{ id: "1", text: "Memory" }] } };
+        },
+      };
+
+      await doAutoRecallImpl(
+        mockClient,
+        "test query",
+        mockSignal,
+        false,
+        { ...defaultConfig, maxRecallTokens: 4096 },
+        () => {}
+      );
+
+      expect(calls[1]!.maxTokens).toBe(1024);
+    });
+
+    it("respects a configured maxRecallTokens below the degraded cap", async () => {
+      const calls: Array<Parameters<RecallClient["recall"]>[0]> = [];
+      const mockClient: RecallClient = {
+        recall: async (options) => {
+          calls.push(options);
+          if (calls.length === 1) {
+            return { success: false, error: "Operation timed out", timedOut: true };
+          }
+          return { success: true, response: { results: [{ id: "1", text: "Memory" }] } };
+        },
+      };
+
+      await doAutoRecallImpl(
+        mockClient,
+        "test query",
+        mockSignal,
+        false,
+        { ...defaultConfig, maxRecallTokens: 512 },
+        () => {}
+      );
+
+      expect(calls[1]!.maxTokens).toBe(512);
+    });
+
+    it("never sends a zero maxTokens on the degraded retry", async () => {
+      const calls: Array<Parameters<RecallClient["recall"]>[0]> = [];
+      const mockClient: RecallClient = {
+        recall: async (options) => {
+          calls.push(options);
+          if (calls.length === 1) {
+            return { success: false, error: "Operation timed out", timedOut: true };
+          }
+          return { success: true, response: { results: [{ id: "1", text: "Memory" }] } };
+        },
+      };
+
+      await doAutoRecallImpl(
+        mockClient,
+        "test query",
+        mockSignal,
+        false,
+        { ...defaultConfig, maxRecallTokens: 0 },
+        () => {}
+      );
+
+      expect(calls[1]!.maxTokens).toBe(1);
     });
   });
 

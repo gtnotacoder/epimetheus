@@ -102,6 +102,8 @@ export interface HindsightConfig {
   hindsightContextPrefix: string;
   hindsightContextMaxLength: number;
   maxRecallTokens: number | null;
+  /** Timeout in milliseconds for recall requests (auto-recall and the recall tool). On timeout, auto-recall retries once in a faster degraded mode. Default: 30000. */
+  recallTimeoutMs: number;
   recallPromptPreamble: string;
   autoRecallShowDateTime: boolean;
   autoRecallDisplay: boolean;
@@ -157,6 +159,7 @@ const DEFAULT_CONFIG: HindsightConfig = {
   hindsightContextPrefix: "pi: ",
   hindsightContextMaxLength: 100,
   maxRecallTokens: null,
+  recallTimeoutMs: 30000,
   recallPromptPreamble:
     "[System note: The following is recalled memory context, NOT new user or assistant input. Prioritize recent when conflicting. Only use memories that are directly useful to continue this conversation; ignore the rest]",
   autoRecallShowDateTime: true,
@@ -217,6 +220,7 @@ const VALID_CONFIG_KEYS = new Set<keyof HindsightConfig>([
   "hindsightContextPrefix",
   "hindsightContextMaxLength",
   "maxRecallTokens",
+  "recallTimeoutMs",
   "recallPromptPreamble",
   "autoRecallShowDateTime",
   "autoRecallDisplay",
@@ -601,7 +605,8 @@ function setConfigValue(
       );
     }
     case "hindsightContextMaxLength":
-    case "recallMaxQueryChars": {
+    case "recallMaxQueryChars":
+    case "recallTimeoutMs": {
       if (typeof value === "number" && Number.isFinite(value)) {
         config[key] = value;
         return;
@@ -1173,6 +1178,11 @@ export function loadConfig(extensionsDir?: string): {
       legacy: ["PI_HINDSIGHT_MAX_RECALL_TOKENS"],
     },
     {
+      configKey: "recallTimeoutMs",
+      preferred: "EPIMETHEUS_RECALL_TIMEOUT_MS",
+      legacy: ["PI_HINDSIGHT_RECALL_TIMEOUT_MS"],
+    },
+    {
       configKey: "recallPromptPreamble",
       preferred: "EPIMETHEUS_RECALL_PROMPT_PREAMBLE",
       legacy: ["PI_HINDSIGHT_RECALL_PROMPT_PREAMBLE"],
@@ -1399,6 +1409,20 @@ export function validateConfig(config: HindsightConfig): {
       `recallMaxQueryChars must be >= 1. Using default: ${DEFAULT_CONFIG.recallMaxQueryChars}.`
     );
     config.recallMaxQueryChars = DEFAULT_CONFIG.recallMaxQueryChars;
+  }
+
+  // Validate recallTimeoutMs - warn and reset to default if not a positive
+  // number. Recall settings warn+reset (not fail-closed) since they do not
+  // affect the retention pipeline.
+  if (
+    typeof config.recallTimeoutMs !== "number" ||
+    Number.isNaN(config.recallTimeoutMs) ||
+    config.recallTimeoutMs < 1
+  ) {
+    warnings.push(
+      `recallTimeoutMs must be a positive number. Using default: ${DEFAULT_CONFIG.recallTimeoutMs}.`
+    );
+    config.recallTimeoutMs = DEFAULT_CONFIG.recallTimeoutMs;
   }
 
   // Valid content types per retainContent role

@@ -3146,6 +3146,61 @@ describe("real entrypoint bootstrap", () => {
     expect(recallMsg?.content).toContain("Cached memory");
   });
 
+  it("before_agent_start falls back to degraded recall and injects best-effort results on timeout", async () => {
+    activeConfig = { ...testConfig, autoRecallPersist: true };
+    let recallCalls = 0;
+    activeClientFactory = () => ({
+      healthCheck: mock(() => Promise.resolve({ success: true })),
+      retain: mock(() => Promise.resolve({ success: true })),
+      retainBatch: mock(() => Promise.resolve({ success: true })),
+      recall: mock(() => {
+        recallCalls += 1;
+        if (recallCalls === 1) {
+          return Promise.resolve({
+            success: false,
+            error: "Operation timed out after 30000ms",
+            timedOut: true,
+          });
+        }
+        return Promise.resolve({
+          success: true,
+          response: { results: [{ id: "1", text: "Best-effort memory" }] },
+        });
+      }),
+      reflect: mock(() => Promise.resolve({ success: true, response: { text: "" } })),
+    });
+
+    const pi = createMockPi();
+    const extension = await import("../src/index");
+    extension.default(pi);
+    await runHealthySessionStart(pi);
+
+    const handler = pi.handlers.get("before_agent_start")!;
+    const ctx = createMockContext({
+      sessionManager: {
+        ...createMockContext().sessionManager,
+        getEntries: mock(() => [
+          {
+            type: "message",
+            message: { role: "user", content: [{ type: "text", text: "What do I prefer?" }] },
+          },
+        ]),
+      },
+    });
+
+    const result = (await handler(
+      { type: "before_agent_start", prompt: "What do I prefer?" },
+      ctx
+    )) as Record<string, unknown> | undefined;
+
+    expect(result).toBeDefined();
+    const msg = result?.message as Record<string, unknown>;
+    expect(msg.customType).toBe("hindsight-recall");
+    expect(msg.content as string).toContain("Best-effort memory");
+    expect(msg.content as string).toContain("degraded");
+    expect(recallCalls).toBe(2);
+  });
+
   it("before_agent_start performs recall on first message of session", async () => {
     // Verifies that auto-recall uses event.prompt instead of scanning entries.
     // getEntries() returns empty here (first message of session), confirming

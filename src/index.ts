@@ -7,7 +7,7 @@
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Text } from "@earendil-works/pi-tui";
-import type { RecallResponse } from "@vectorize-io/hindsight-client";
+import type { Budget, RecallResponse } from "@vectorize-io/hindsight-client";
 import { HindsightClientWrapper } from "./client";
 import { registerCommands } from "./commands";
 import { flushAllPending } from "./commands/session";
@@ -32,6 +32,7 @@ import {
   clearStartupReady,
   DegradedReasonKind,
   getDegradedReason,
+  incrementDegradedRecallCount,
   isOperationalReady,
   markStartupReady,
   resetRegisteredHindsightTools,
@@ -946,6 +947,8 @@ ${details}`)
       autoRecallTags: expandedTags,
       autoRecallTagsMatch: config.autoRecallTagsMatch,
       autoRecallTagGroups: expandedTagGroups,
+      recallTimeoutMs: config.recallTimeoutMs,
+      maxRecallTokens: config.maxRecallTokens,
     };
     // Clear stale recall on error/no-results (doAutoRecallImpl calls cacheDetails(null))
     return doAutoRecallImpl(client, query, signal, display, recallConfig, (details) => {
@@ -1066,7 +1069,8 @@ export function formatRecallMessage(
   results: RecallResponse["results"],
   preamble: string,
   showDateTime: boolean,
-  display: boolean = false
+  display: boolean = false,
+  degradedNote?: string
 ): {
   role: "custom";
   customType: string;
@@ -1082,6 +1086,11 @@ export function formatRecallMessage(
 
   // Preamble is the configurable system note (appears at top)
   innerParts.push(preamble);
+
+  // One-line degradation note when results come from the degraded retry
+  if (degradedNote) {
+    innerParts.push(degradedNote);
+  }
 
   if (showDateTime) {
     const now = new Date();
@@ -1142,12 +1151,16 @@ export interface RecallClient {
       tags?: string[];
       tagsMatch?: TagsMatch;
       tagGroups?: TagGroupInput[];
+      budget?: Budget;
+      maxTokens?: number | null;
     },
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    timeoutMs?: number
   ) => Promise<{
     success: boolean;
     response?: RecallResponse;
     error?: string;
+    timedOut?: boolean;
   }>;
 }
 
@@ -1162,7 +1175,25 @@ export interface AutoRecallConfig {
   autoRecallTags: string[] | null;
   autoRecallTagsMatch: TagsMatch;
   autoRecallTagGroups: TagGroupInput[] | null;
+  /** Timeout in milliseconds for the first recall attempt. */
+  recallTimeoutMs: number;
+  /** Configured max recall tokens; the degraded retry uses a reduced cap. */
+  maxRecallTokens: number | null;
 }
+
+/**
+ * Timeout ceiling for the degraded (cheap-mode) recall retry after a
+ * first-attempt timeout. Kept short so a slow bank degrades gracefully
+ * instead of stalling the turn.
+ */
+const DEGRADED_RECALL_RETRY_TIMEOUT_MS = 5000;
+
+/** Token cap for the degraded recall retry (reduced from the configured max). */
+const DEGRADED_RECALL_MAX_TOKENS = 1024;
+
+/** One-line note injected into the recall message when results come from the degraded retry. */
+const DEGRADED_RECALL_NOTE =
+  "[Hindsight: recall timed out; showing best-effort results from a faster degraded retrieval (may be less complete)]";
 
 /**
  * Perform auto-recall with the given query.
@@ -1194,21 +1225,59 @@ export async function doAutoRecallImpl(
   try {
     // Create a fallback signal if none provided
     const abortSignal = signal ?? new AbortController().signal;
-    const result = await client.recall(
-      {
-        query: truncatedQuery,
-        types: config.autoRecallTypes ?? undefined,
-        tags: config.autoRecallTags ?? undefined,
-        tagsMatch:
-          config.autoRecallTags || config.autoRecallTagsMatch === "exact"
-            ? config.autoRecallTagsMatch
-            : undefined,
-        tagGroups: config.autoRecallTagGroups ?? undefined,
-      },
-      abortSignal
-    );
+    const recallOptions: Parameters<RecallClient["recall"]>[0] = {
+      query: truncatedQuery,
+      types: config.autoRecallTypes ?? undefined,
+      tags: config.autoRecallTags ?? undefined,
+      tagsMatch:
+        config.autoRecallTags || config.autoRecallTagsMatch === "exact"
+          ? config.autoRecallTagsMatch
+          : undefined,
+      tagGroups: config.autoRecallTagGroups ?? undefined,
+    };
+    const result = await client.recall(recallOptions, abortSignal, config.recallTimeoutMs);
 
     if (!result.success) {
+      // Degraded fallback: on a timeout, retry once with a cheaper retrieval
+      // (low budget, reduced max tokens, short ceiling) so a slow bank still
+      // yields best-effort memories instead of silently recalling nothing.
+      // Skip the retry when the signal is already aborted — the turn is being
+      // cancelled and the retry would only fail immediately.
+      if (result.timedOut && !abortSignal.aborted) {
+        incrementDegradedRecallCount();
+        const retryResult = await client.recall(
+          {
+            ...recallOptions,
+            budget: "low",
+            maxTokens: Math.max(
+              1,
+              Math.min(
+                config.maxRecallTokens ?? DEGRADED_RECALL_MAX_TOKENS,
+                DEGRADED_RECALL_MAX_TOKENS
+              )
+            ),
+          },
+          abortSignal,
+          DEGRADED_RECALL_RETRY_TIMEOUT_MS
+        );
+        if (retryResult.success) {
+          const retryResults = retryResult.response?.results ?? [];
+          if (retryResults.length > 0) {
+            const recallMessage = formatRecallMessage(
+              retryResults,
+              config.recallPromptPreamble,
+              config.autoRecallShowDateTime,
+              display,
+              DEGRADED_RECALL_NOTE
+            );
+            // Cache recall details for show-recall command
+            cacheDetails(recallMessage.details);
+            return { recallMessage };
+          }
+        } else {
+          debugWarn("Auto-recall degraded retry failed:", retryResult.error);
+        }
+      }
       debugWarn("Auto-recall failed:", result.error);
       cacheDetails(null);
       return null;

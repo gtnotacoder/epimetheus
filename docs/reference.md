@@ -53,6 +53,7 @@ Configuration is stored in `<getAgentDir()>/epimetheus/config.json` or `config.j
 | `hindsightContextPrefix` | `"pi: "` | Prefix prepended to the session name or first message when building the `context` field for retained documents |
 | `hindsightContextMaxLength` | `100` | Maximum character length for the `context` field (including prefix) when the session name is auto-derived from the first user message. Manually set session names are preserved as-is and may exceed this length. |
 | `maxRecallTokens` | `null` | Maximum tokens for recalled content. When `null`, uses Hindsight's default (4096). See [max tokens context window size](https://hindsight.vectorize.io/developer/retrieval#max-tokens-context-window-size) for details. |
+| `recallTimeoutMs` | `30000` | Timeout in milliseconds for recall requests (auto-recall and the `hindsight_recall` tool). On timeout, auto-recall retries once with a faster degraded retrieval (low budget, reduced max tokens, 5s ceiling) and injects the best-effort results with a one-line degradation note. |
 | `recallMaxQueryChars` | `800` | Maximum characters from the user's message to use as the recall query |
 | `recallPromptPreamble` | *(see defaults)* | The system note text inside `<hindsight_memories>` fences that instructs the LLM how to use recalled memories |
 | `constantTags` | `["harness:pi"]` | Tags included on every retained document (useful for filtering in Hindsight) |
@@ -602,6 +603,7 @@ Configuration options can also be set via environment variables (override config
 | `EPIMETHEUS_CONTEXT_PREFIX` | `hindsightContextPrefix` | string | `"pi: "` |
 | `EPIMETHEUS_CONTEXT_MAX_LENGTH` | `hindsightContextMaxLength` | number | `100` |
 | `EPIMETHEUS_MAX_RECALL_TOKENS` | `maxRecallTokens` | number \| null | `null` |
+| `EPIMETHEUS_RECALL_TIMEOUT_MS` | `recallTimeoutMs` | number | `30000` |
 | `EPIMETHEUS_RECALL_PROMPT_PREAMBLE` | `recallPromptPreamble` | string | *(see defaults)* |
 | `EPIMETHEUS_AUTO_RECALL_SHOW_DATETIME` | `autoRecallShowDateTime` | boolean | `true` |
 | `EPIMETHEUS_AUTO_RECALL_DISPLAY` | `autoRecallDisplay` | boolean | `false` |

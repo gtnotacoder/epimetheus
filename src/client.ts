@@ -240,12 +240,21 @@ export class HindsightClientWrapper {
 
   /**
    * Recall memories with timeout and optional abort signal.
+   * The timeout defaults to the configured recallTimeoutMs (30000) — recall
+   * against large banks can take 8-30s, so the old hard-coded 10s default
+   * silently failed every turn. On timeout, `timedOut` is set so callers can
+   * fall back to a cheaper degraded retrieval.
    */
   async recall(
     options: RecallOptions,
     signal?: AbortSignal,
-    timeoutMs: number = 10000
-  ): Promise<{ success: boolean; response?: RecallResponse; error?: string }> {
+    timeoutMs?: number
+  ): Promise<{
+    success: boolean;
+    response?: RecallResponse;
+    error?: string;
+    timedOut?: boolean;
+  }> {
     try {
       const result = await this.withTimeout(
         this.client.recall(this.config.bankId, options.query, {
@@ -257,13 +266,18 @@ export class HindsightClientWrapper {
           maxTokens: options.maxTokens ?? this.config.maxRecallTokens ?? undefined,
           includeEntities: true,
         }),
-        timeoutMs,
+        timeoutMs ?? this.config.recallTimeoutMs,
         signal
       );
 
       return { success: true, response: result };
     } catch (e) {
-      return { success: false, error: this.formatError(e) };
+      // withTimeout rejects with a plain Error("Operation timed out after Xms")
+      // for timeouts. Detect on the raw error before formatError appends the
+      // bank/url context, so callers can distinguish a timeout from other
+      // failures (aborts reject with "Operation aborted" and never match).
+      const timedOut = e instanceof Error && e.message.startsWith("Operation timed out");
+      return { success: false, error: this.formatError(e), timedOut };
     }
   }
 

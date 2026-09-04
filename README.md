@@ -193,6 +193,9 @@ Configuration is stored in `<getAgentDir()>/epimetheus/config.json` or `config.j
   // if you want to reduce injected memory tokens (hindsight default: 4096, high: 8192)
   // see https://hindsight.vectorize.io/developer/retrieval#max-tokens-context-window-size
   "maxRecallTokens": 2048,
+  // recall timeout in ms; on timeout auto-recall retries once with a faster
+  // degraded retrieval and injects best-effort results (default: 30000)
+  // "recallTimeoutMs": 30000,
   // required; see observationScopes section in docs/reference.md for details
   "observationScopes": [
     ["user:<me>"],  // global observations across all your sessions

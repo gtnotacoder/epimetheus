@@ -421,6 +421,31 @@ describe("recall", () => {
     sdk.recall = origRecall;
   });
 
+  it("uses config.recallTimeoutMs as the default timeout", async () => {
+    const client = new HindsightClientWrapper({ ...testConfig, recallTimeoutMs: 50 });
+    const { sdk, origRecall } = mockSdkMethods(client);
+    sdk.recall = mock(() => new Promise(() => {}));
+
+    const result = await client.recall({ query: "test" });
+
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(true);
+    expect(result.error).toContain("timed out after 50ms");
+    sdk.recall = origRecall;
+  });
+
+  it("does not set timedOut on non-timeout errors", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const { sdk, origRecall } = mockSdkMethods(client);
+    sdk.recall = mock(() => Promise.reject(new Error("recall failed")));
+
+    const result = await client.recall({ query: "test" });
+
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    sdk.recall = origRecall;
+  });
+
   it("returns error on abort", async () => {
     const client = new HindsightClientWrapper(testConfig);
     const { sdk, origRecall } = mockSdkMethods(client);
