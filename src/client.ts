@@ -17,6 +17,7 @@ import type {
   OperationsListResponse,
   RecoverConsolidationResponse,
 } from "./consolidation";
+import type { MemoryListResponse, MemoryUnit } from "./curate";
 import type { EntityGraphResponse, EntityListResponse } from "./graph";
 
 export interface RetainOptions {
@@ -404,6 +405,44 @@ export class HindsightClientWrapper {
     return this.fetchJson<RecoverConsolidationResponse>(url, signal, timeoutMs, {
       method: "POST",
       body: {},
+    });
+  }
+
+  /**
+   * List memory units via GET /memories/list (the SDK's HindsightClient has
+   * no curation methods, so this uses raw fetch like getOperations). An empty
+   * `q` is treated as omitted — the server treats q= as a filter, not a
+   * no-op. The `state` query param filters server-side (valid/invalidated).
+   */
+  async listMemories(
+    options: { q?: string; state?: string; limit?: number } = {},
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: MemoryListResponse; error?: string }> {
+    const params = new URLSearchParams();
+    if (options.q !== undefined && options.q !== "") params.set("q", options.q);
+    if (options.state !== undefined) params.set("state", options.state);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    const qs = params.toString();
+    const url = `${this.config.apiUrl}/v1/default/banks/${encodeURIComponent(this.config.bankId)}/memories/list${qs ? `?${qs}` : ""}`;
+    return this.fetchJson<MemoryListResponse>(url, signal, timeoutMs);
+  }
+
+  /**
+   * Curate a memory unit via PATCH /memories/{id}. The server records the
+   * reason when state is invalidated and keeps it in the memory's history
+   * when reverted. Returns the updated memory unit.
+   */
+  async updateMemory(
+    memoryId: string,
+    body: { state?: string; reason?: string },
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: MemoryUnit; error?: string }> {
+    const url = `${this.config.apiUrl}/v1/default/banks/${encodeURIComponent(this.config.bankId)}/memories/${encodeURIComponent(memoryId)}`;
+    return this.fetchJson<MemoryUnit>(url, signal, timeoutMs, {
+      method: "PATCH",
+      body,
     });
   }
 

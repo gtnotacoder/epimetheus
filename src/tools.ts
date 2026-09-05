@@ -2,13 +2,18 @@
  * Manual tools for Hindsight memory operations.
  */
 
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { Budget, RecallResponse, ReflectResponse } from "@vectorize-io/hindsight-client";
 import { type Static, Type } from "typebox";
 import type { HindsightClientWrapper } from "./client";
 import type { HindsightConfig, MemoryType, ToolName } from "./config";
 import { CONSOLIDATION_TASK_TYPE, type OperationItem, renderOperations } from "./consolidation";
+import { renderMemories } from "./curate";
 import { renderEntityGraph, resolveSeedInGraph } from "./graph";
 import { getHindsightMeta, shouldSessionBeRetained, updateSessionMetadata } from "./meta";
 import { resolveProjectName } from "./project-config";
@@ -82,6 +87,11 @@ interface ConsolidateDetails {
   error?: string;
 }
 
+interface CurateDetails {
+  success: boolean;
+  error?: string;
+}
+
 /**
  * Check if a specific tool is enabled based on config.toolsEnabled.
  * - `true` (default): all tools enabled
@@ -95,14 +105,81 @@ export function isToolEnabled(config: HindsightConfig, tool: ToolName): boolean 
 }
 
 /**
+ * Normalize a curation reason: trim whitespace, reject empty-after-trim
+ * (returns null), and cap at 500 chars so the recorded reason stays bounded.
+ */
+function normalizeReason(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  return trimmed.length > 500 ? `${trimmed.slice(0, 500)}...` : trimmed;
+}
+
+/**
+ * Queue a supersede successor through the existing retain path, mirroring
+ * hindsight_retain's execute (session retention check, project-aware cwd,
+ * fail-closed project-name resolution). Returns a failure message, or null
+ * when the successor was queued.
+ */
+async function queueSuccessorRetain(
+  ctx: ExtensionContext,
+  config: HindsightConfig,
+  content: string
+): Promise<string | null> {
+  const sessionId = ctx.sessionManager.getSessionId();
+  if (!sessionId) {
+    return "no active session";
+  }
+
+  const entries = ctx.sessionManager.getEntries();
+  if (!shouldSessionBeRetained(entries, config)) {
+    return "Session does not allow retention. Use /hindsight toggle-retain to enable retention.";
+  }
+
+  const header = ctx.sessionManager.getHeader();
+  const parentSessionId = extractParentSessionId(header?.parentSession);
+
+  const meta = getHindsightMeta(entries);
+  const sessionUserTags = meta?.tags ?? [];
+
+  const retainCwd = header?.cwd ?? ctx.cwd;
+  const projectNameResult = resolveProjectName(retainCwd, meta?.usesProjectConfig);
+  if (!projectNameResult.ok) {
+    const recoveryAdvice =
+      projectNameResult.recovery === "fix-config"
+        ? `Fix the config at ${retainCwd}/.pi/epimetheus/config.jsonc.`
+        : `Use /hindsight detach-project-name to stop requiring the project-local projectName override, or restore the config at ${retainCwd}/.pi/epimetheus/.`;
+    return `${projectNameResult.error}. ${recoveryAdvice}`;
+  }
+
+  const result = await queueToolRetain(
+    sessionId,
+    content,
+    undefined,
+    undefined,
+    retainCwd,
+    parentSessionId,
+    config,
+    sessionUserTags,
+    projectNameResult.projectName
+  );
+  if (!result.success) {
+    return result.error ?? "unknown error";
+  }
+  return null;
+}
+
+/**
  * Register the hindsight manual tools:
  * `hindsight_set_extra_context`, `hindsight_get_extra_context`, `hindsight_retain`,
- * `hindsight_recall`, and `hindsight_reflect`. Each is gated by
+ * `hindsight_recall`, `hindsight_reflect`, `hindsight_graph`,
+ * `hindsight_consolidate`, and `hindsight_curate`. Each is gated by
  * `config.toolsEnabled` (via {@link isToolEnabled}) — `true` (default) enables
  * all, `false` disables all, and an array enables only the listed tool names.
  * The extra-context and retain tools are client-free (disk/local operations),
- * so they are registered based solely on `toolsEnabled`. `hindsight_recall`
- * and `hindsight_reflect` need a live client and are not registered at all
+ * so they are registered based solely on `toolsEnabled`. `hindsight_recall`,
+ * `hindsight_reflect`, `hindsight_graph`, `hindsight_consolidate`, and
+ * `hindsight_curate` need a live client and are not registered at all
  * when `client` is null (`if (!client) return;` runs before their blocks).
  *
  * This is called lazily from the `session_start` success path (after health +
@@ -899,6 +976,233 @@ export function registerTools(
     });
   }
 
+  // Register hindsight_curate if enabled
+  if (isToolEnabled(config, "curate")) {
+    registered.push("hindsight_curate");
+    pi.registerTool({
+      name: "hindsight_curate",
+      label: "Hindsight Curate",
+      description:
+        "Curate the memory bank's fact lifecycle. find (default) searches memories (q text search, optional state filter) and lists candidates one per line; invalidate soft-retires a memory with a REQUIRED reason (deliberate-only — the reason is recorded server-side and visible in the memory's history); supersede invalidates a memory naming its successor and queues the successor for storage (two-step); revert restores an invalidated memory to valid. Invalidation is reversible via revert. Raise maxTokens (up to 4000) for larger listings — the 600 default fits roughly 17 lines.",
+      parameters: Type.Object({
+        mode: Type.Optional(
+          Type.Union(
+            [
+              Type.Literal("find"),
+              Type.Literal("invalidate"),
+              Type.Literal("supersede"),
+              Type.Literal("revert"),
+            ],
+            {
+              description:
+                "Operation mode. find (default) lists candidate memories; invalidate soft-retires one with a reason; supersede invalidates one and queues its successor; revert restores an invalidated memory to valid.",
+            }
+          )
+        ),
+        q: Type.Optional(
+          Type.String({
+            description:
+              "Text search query (find mode). Omit to list recent memories. An empty string is treated as omitted.",
+          })
+        ),
+        state: Type.Optional(
+          Type.Union([Type.Literal("valid"), Type.Literal("invalidated")], {
+            description: "Filter candidates by state (find mode). Default: no filter.",
+          })
+        ),
+        memoryId: Type.Optional(
+          Type.String({
+            description: "Memory id to act on. Required for invalidate, supersede, and revert.",
+          })
+        ),
+        reason: Type.Optional(
+          Type.String({
+            description:
+              "Why the memory is being retired. REQUIRED for invalidate (every retirement must be explained); optional for supersede (defaults to 'Superseded by: <successor snippet>'). Recorded server-side.",
+          })
+        ),
+        successor: Type.Optional(
+          Type.String({
+            description:
+              "The new fact text that replaces the invalidated memory. Required for supersede.",
+          })
+        ),
+        maxTokens: Type.Optional(
+          Type.Integer({
+            minimum: 100,
+            maximum: 4000,
+            description: "Token budget for the rendered candidate list (find mode). Default: 600.",
+          })
+        ),
+      }),
+
+      async execute(
+        _toolCallId,
+        params,
+        signal,
+        _onUpdate,
+        ctx
+      ): Promise<AgentToolResult<CurateDetails>> {
+        const mode = params.mode ?? "find";
+        const maxTokens = params.maxTokens ?? 600;
+
+        if (mode === "find") {
+          const listResult = await client.listMemories(
+            { q: params.q, state: params.state, limit: 20 },
+            signal
+          );
+          if (!listResult.success) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed to list memories: ${listResult.error ?? "unknown error"}`,
+                },
+              ],
+              details: { success: false, error: listResult.error },
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: renderMemories(listResult.response?.items ?? [], { maxTokens }),
+              },
+            ],
+            details: { success: true },
+          };
+        }
+
+        if (mode === "invalidate" || mode === "supersede" || mode === "revert") {
+          if (!params.memoryId) {
+            return {
+              content: [{ type: "text", text: `memoryId is required for ${mode}` }],
+              details: { success: false, error: "memoryId is required" },
+            };
+          }
+          const idPrefix = params.memoryId.slice(0, 8);
+
+          if (mode === "revert") {
+            const result = await client.updateMemory(params.memoryId, { state: "valid" }, signal);
+            if (!result.success) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Failed to revert memory: ${result.error ?? "unknown error"}`,
+                  },
+                ],
+                details: { success: false, error: result.error },
+              };
+            }
+            return {
+              content: [{ type: "text", text: `Reverted ${idPrefix} to valid.` }],
+              details: { success: true },
+            };
+          }
+
+          // invalidate and supersede share the PATCH step. The reason is
+          // trimmed and capped; an empty-after-trim reason fails invalidate
+          // (deliberate-only) and falls back to the successor default for
+          // supersede.
+          let reason: string;
+          let successor = "";
+          if (mode === "invalidate") {
+            const normalized = normalizeReason(params.reason);
+            if (!normalized) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "reason is required to invalidate — every retirement must be explained",
+                  },
+                ],
+                details: { success: false, error: "reason is required" },
+              };
+            }
+            reason = normalized;
+          } else {
+            if (!params.successor) {
+              return {
+                content: [{ type: "text", text: "successor is required for supersede" }],
+                details: { success: false, error: "successor is required" },
+              };
+            }
+            successor = params.successor.trim();
+            if (successor === "") {
+              return {
+                content: [{ type: "text", text: "successor is required for supersede" }],
+                details: { success: false, error: "successor is required" },
+              };
+            }
+            reason = normalizeReason(params.reason) ?? `Superseded by: ${successor.slice(0, 80)}`;
+          }
+
+          const patchResult = await client.updateMemory(
+            params.memoryId,
+            { state: "invalidated", reason },
+            signal
+          );
+          if (!patchResult.success) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed to invalidate memory: ${patchResult.error ?? "unknown error"}`,
+                },
+              ],
+              details: { success: false, error: patchResult.error },
+            };
+          }
+
+          if (mode === "invalidate") {
+            return {
+              content: [{ type: "text", text: `Invalidated ${idPrefix}: ${reason}` }],
+              details: { success: true },
+            };
+          }
+
+          // supersede: retain the successor via the existing retain path,
+          // mirroring hindsight_retain's execute (session retention check,
+          // project-aware cwd, fail-closed project-name resolution). The
+          // invalidation already happened, so the two-step report states both
+          // outcomes honestly.
+          const retainFailure = await queueSuccessorRetain(ctx, config, successor);
+          if (retainFailure) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Invalidated ${idPrefix}: ${reason}\nSuccessor NOT queued: ${retainFailure}`,
+                },
+              ],
+              details: { success: true },
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Invalidated ${idPrefix}: ${reason}\nSuccessor queued for storage.`,
+              },
+            ],
+            details: { success: true },
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Unknown mode '${String(mode)}'. Valid modes: find, invalidate, supersede, revert.`,
+            },
+          ],
+          details: { success: false, error: `unknown mode: ${String(mode)}` },
+        };
+      },
+    });
+  }
+
   setRegisteredHindsightTools(registered);
   return registered;
 }
@@ -917,6 +1221,7 @@ const HINDSIGHT_OWNED_TOOLS = new Set([
   "hindsight_reflect",
   "hindsight_graph",
   "hindsight_consolidate",
+  "hindsight_curate",
 ]);
 
 /**

@@ -175,6 +175,45 @@ function createMockClient(): HindsightClientWrapper {
     recoverConsolidation: mock(() =>
       Promise.resolve({ success: true, response: { retried_count: 0 } })
     ),
+    listMemories: mock(() =>
+      Promise.resolve({
+        success: true,
+        response: {
+          items: [
+            {
+              id: "aaaaaaaa-1111-2222-3333-444444444444",
+              text: "The dev VM runs Docker CE 29.4.0 with Compose.",
+              state: "valid",
+              date: "2026-09-02T12:00:00+00:00",
+            },
+            {
+              id: "bbbbbbbb-1111-2222-3333-444444444444",
+              text: "The old bank URL was http://10.100.0.100:8888.",
+              state: "invalidated",
+              date: "2026-08-18T13:34:51.115819+00:00",
+              invalidated_at: "2026-09-04T10:00:00+00:00",
+              invalidation_reason: "Bank URL moved to the new host",
+            },
+          ],
+          total: 2,
+          limit: 20,
+          offset: 0,
+        },
+      })
+    ),
+    updateMemory: mock(() =>
+      Promise.resolve({
+        success: true,
+        response: {
+          id: "aaaaaaaa-1111-2222-3333-444444444444",
+          text: "The dev VM runs Docker CE 29.4.0 with Compose.",
+          state: "invalidated",
+          date: "2026-09-02T12:00:00+00:00",
+          invalidated_at: "2026-09-05T12:00:00+00:00",
+          invalidation_reason: "test reason",
+        },
+      })
+    ),
     healthCheck: mock(() => Promise.resolve({ success: true })),
     retain: mock(() => Promise.resolve({ success: true })),
     retainBatch: mock(() => Promise.resolve({ success: true })),
@@ -2019,5 +2058,370 @@ describe("hindsight_consolidate auto failure reporting", () => {
     // The recovery that already happened is still reported.
     expect(result.content[0]?.text).toContain("Recovered 1 failed consolidation operation(s).");
     expect(result.content[0]?.text).toContain("Failed to trigger consolidation: HTTP 500");
+  });
+});
+
+// ============================================
+// hindsight_curate tests
+// ============================================
+
+describe("hindsight_curate", () => {
+  it("is registered when toolsEnabled includes curate", async () => {
+    const pi = createMockPi();
+    registerTools(pi, { ...testConfig, toolsEnabled: ["curate"] }, createMockClient());
+    expect(pi.tools.map((t: ToolDef) => t.name)).toContain("hindsight_curate");
+  });
+
+  it("is not registered when toolsEnabled excludes curate", async () => {
+    const pi = createMockPi();
+    registerTools(pi, { ...testConfig, toolsEnabled: ["recall"] }, createMockClient());
+    expect(pi.tools.map((t: ToolDef) => t.name)).not.toContain("hindsight_curate");
+  });
+
+  it("is not registered when the client is null", async () => {
+    const pi = createMockPi();
+    registerTools(pi, testConfig, null);
+    expect(pi.tools.map((t: ToolDef) => t.name)).not.toContain("hindsight_curate");
+  });
+
+  it("find mode renders candidates with id, state, and snippet", async () => {
+    const pi = createMockPi();
+    registerTools(pi, testConfig, createMockClient());
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("aaaaaaaa valid");
+    expect(result.content[0]?.text).toContain("The dev VM runs Docker CE 29.4.0 with Compose.");
+    expect(result.content[0]?.text).toContain("bbbbbbbb invalidated");
+    expect(result.content[0]?.text).toContain("[reason: Bank URL moved to the new host]");
+  });
+
+  it("find mode passes q and state to client.listMemories", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const listMock = client.listMemories as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    await tool!.execute("tc1", { q: "dark mode", state: "valid" }, undefined, undefined, ctx);
+
+    const callArgs = listMock.mock.calls[0]![0]!;
+    expect(callArgs.q).toBe("dark mode");
+    expect(callArgs.state).toBe("valid");
+    expect(callArgs.limit).toBe(20);
+  });
+
+  it("find mode reports 'No memories found.' for an empty result", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.listMemories as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { items: [], total: 0, limit: 20, offset: 0 },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toBe("No memories found.");
+  });
+
+  it("find mode reports client failures", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.listMemories as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: false,
+      error: "HTTP 500",
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("Failed to list memories: HTTP 500");
+  });
+
+  it("invalidate requires a memoryId", async () => {
+    const pi = createMockPi();
+    registerTools(pi, testConfig, createMockClient());
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      { mode: "invalidate", reason: "stale" },
+      undefined,
+      undefined,
+      ctx
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("memoryId is required for invalidate");
+  });
+
+  it("invalidate requires a non-empty reason", async () => {
+    const pi = createMockPi();
+    registerTools(pi, testConfig, createMockClient());
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    for (const reason of [undefined, "   "]) {
+      const result = (await tool!.execute(
+        "tc1",
+        { mode: "invalidate", memoryId: "aaaaaaaa-1111-2222-3333-444444444444", reason },
+        undefined,
+        undefined,
+        ctx
+      )) as {
+        content: Array<{ type: string; text: string }>;
+        details: { success: boolean; error: string };
+      };
+
+      expect(result.details.success).toBe(false);
+      expect(result.content[0]?.text).toContain("reason is required to invalidate");
+    }
+  });
+
+  it("invalidate PATCHes state=invalidated with the reason and echoes it", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const updateMock = client.updateMemory as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      {
+        mode: "invalidate",
+        memoryId: "aaaaaaaa-1111-2222-3333-444444444444",
+        reason: "  stale fact  ",
+      },
+      undefined,
+      undefined,
+      ctx
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(updateMock.mock.calls[0]![0]).toBe("aaaaaaaa-1111-2222-3333-444444444444");
+    expect(updateMock.mock.calls[0]![1]).toEqual({ state: "invalidated", reason: "stale fact" });
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Invalidated aaaaaaaa: stale fact");
+  });
+
+  it("caps the reason at 500 characters", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const updateMock = client.updateMemory as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    await tool!.execute(
+      "tc1",
+      {
+        mode: "invalidate",
+        memoryId: "aaaaaaaa-1111-2222-3333-444444444444",
+        reason: "x".repeat(600),
+      },
+      undefined,
+      undefined,
+      ctx
+    );
+
+    expect(updateMock.mock.calls[0]![1]).toEqual({
+      state: "invalidated",
+      reason: `${"x".repeat(500)}...`,
+    });
+  });
+
+  it("supersede invalidates with a default reason naming the successor and queues it", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const updateMock = client.updateMemory as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      {
+        mode: "supersede",
+        memoryId: "aaaaaaaa-1111-2222-3333-444444444444",
+        successor: "The dev VM now runs Docker CE 30.",
+      },
+      undefined,
+      undefined,
+      ctx
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(updateMock.mock.calls[0]![1]).toEqual({
+      state: "invalidated",
+      reason: "Superseded by: The dev VM now runs Docker CE 30.",
+    });
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Invalidated aaaaaaaa:");
+    expect(result.content[0]?.text).toContain("Successor queued for storage.");
+
+    const queueEntries = readToolQueueFromDisk(TEST_SESSION_ID);
+    expect(queueEntries).toHaveLength(1);
+    expect(queueEntries[0]?.content).toBe("The dev VM now runs Docker CE 30.");
+  });
+
+  it("supersede rejects a whitespace-only successor", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const updateMock = client.updateMemory as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      {
+        mode: "supersede",
+        memoryId: "aaaaaaaa-1111-2222-3333-444444444444",
+        successor: "   ",
+      },
+      undefined,
+      undefined,
+      ctx
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("successor is required for supersede");
+    expect(updateMock.mock.calls).toHaveLength(0);
+  });
+
+  it("supersede reports the retain failure separately when the session is not retained", async () => {
+    const pi = createMockPi();
+    const config = { ...testConfig, retainSessionsByDefault: false };
+    registerTools(pi, config, createMockClient());
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext({
+      sessionManager: {
+        getSessionId: mock(() => TEST_SESSION_ID),
+        getEntries: mock(() => []), // no meta, falls back to retainSessionsByDefault: false
+        getHeader: mock(() => ({ id: TEST_SESSION_ID })),
+      },
+    });
+
+    const result = (await tool!.execute(
+      "tc1",
+      {
+        mode: "supersede",
+        memoryId: "aaaaaaaa-1111-2222-3333-444444444444",
+        successor: "Replacement fact",
+      },
+      undefined,
+      undefined,
+      ctx
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    // The invalidation already happened — the two-step report states both.
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Invalidated aaaaaaaa:");
+    expect(result.content[0]?.text).toContain("Successor NOT queued:");
+    expect(result.content[0]?.text).toContain("toggle-retain");
+    expect(readToolQueueFromDisk(TEST_SESSION_ID)).toHaveLength(0);
+  });
+
+  it("revert requires a memoryId and PATCHes state=valid", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const updateMock = client.updateMemory as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const missing = (await tool!.execute("tc1", { mode: "revert" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+    expect(missing.details.success).toBe(false);
+    expect(missing.content[0]?.text).toContain("memoryId is required for revert");
+
+    const result = (await tool!.execute(
+      "tc1",
+      { mode: "revert", memoryId: "aaaaaaaa-1111-2222-3333-444444444444" },
+      undefined,
+      undefined,
+      ctx
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(updateMock.mock.calls[0]![0]).toBe("aaaaaaaa-1111-2222-3333-444444444444");
+    expect(updateMock.mock.calls[0]![1]).toEqual({ state: "valid" });
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Reverted aaaaaaaa to valid.");
+  });
+
+  it("reports an unknown mode with the valid list", async () => {
+    const pi = createMockPi();
+    registerTools(pi, testConfig, createMockClient());
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { mode: "explode" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("Unknown mode 'explode'");
+    expect(result.content[0]?.text).toContain("find, invalidate, supersede, revert");
+  });
+
+  it("forwards the abort signal to client.updateMemory", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const updateMock = client.updateMemory as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_curate");
+    const ctx = createMockContext();
+    const controller = new AbortController();
+
+    await tool!.execute(
+      "tc1",
+      { mode: "revert", memoryId: "aaaaaaaa-1111-2222-3333-444444444444" },
+      controller.signal,
+      undefined,
+      ctx
+    );
+
+    expect(updateMock.mock.calls[0]![2]).toBe(controller.signal);
   });
 });

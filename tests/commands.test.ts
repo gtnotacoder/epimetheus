@@ -2296,10 +2296,11 @@ describe("registerCommands", () => {
         "hindsight_reflect",
         "hindsight_graph",
         "hindsight_consolidate",
+        "hindsight_curate",
         "hindsight_set_extra_context",
         "hindsight_get_extra_context",
       ]);
-      // Make all seven hindsight tools active so every per-tool line is "active".
+      // Make all eight hindsight tools active so every per-tool line is "active".
       mockActiveTools = [
         "read",
         "bash",
@@ -2313,6 +2314,7 @@ describe("registerCommands", () => {
         "hindsight_reflect",
         "hindsight_graph",
         "hindsight_consolidate",
+        "hindsight_curate",
         "hindsight_set_extra_context",
         "hindsight_get_extra_context",
       ];
@@ -2338,18 +2340,29 @@ describe("registerCommands", () => {
           origin: "top-level",
         },
       });
+      mockAllTools.push({
+        name: "hindsight_curate",
+        description: "curate",
+        parameters: {},
+        sourceInfo: {
+          path: "<extension>:hindsight_curate",
+          source: "extension",
+          scope: "project",
+          origin: "top-level",
+        },
+      });
       await getHandler()("active-tools", makeCtx());
       const msg = lastNotification!.message;
       // Keeps the original active-tools summary.
-      expect(msg).toContain("Active tools (14):");
+      expect(msg).toContain("Active tools (15):");
       expect(msg).toContain(
-        "hindsight: [hindsight_retain, hindsight_recall, hindsight_reflect, hindsight_graph, hindsight_consolidate, hindsight_set_extra_context, hindsight_get_extra_context]"
+        "hindsight: [hindsight_retain, hindsight_recall, hindsight_reflect, hindsight_graph, hindsight_consolidate, hindsight_curate, hindsight_set_extra_context, hindsight_get_extra_context]"
       );
       // Shows registration breakdown.
       expect(msg).toContain("== Hindsight Tool Registration ==");
       expect(msg).toContain("Operational ready:        yes");
       expect(msg).toContain("of which hindsight: [hindsight_retain");
-      // All five hindsight tools are registered-and-active.
+      // All eight hindsight tools are registered-and-active.
       expect(msg).toContain(
         "✓ active:           hindsight_recall  [extension, top-level, project]"
       );

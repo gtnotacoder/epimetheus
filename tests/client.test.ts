@@ -505,6 +505,127 @@ describe("recoverConsolidation", () => {
   });
 });
 
+describe("listMemories", () => {
+  it("fetches memories with q, state, and limit query params", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], total: 0, limit: 20, offset: 0 }),
+      })
+    );
+
+    const result = await client.listMemories({ q: "dark mode", state: "valid", limit: 20 });
+
+    expect(result.success).toBe(true);
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(url).toBe(
+      "https://test.vectorize.io/v1/default/banks/test-bank/memories/list?q=dark+mode&state=valid&limit=20"
+    );
+  });
+
+  it("treats an empty q as omitted", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], total: 0, limit: 20, offset: 0 }),
+      })
+    );
+
+    await client.listMemories({ q: "", limit: 20 });
+
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://test.vectorize.io/v1/default/banks/test-bank/memories/list?limit=20");
+  });
+
+  it("returns HTTP status error on non-OK responses", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    (globalThis.fetch as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      createAbortAwareFetch({ ok: false, status: 500 })
+    );
+
+    const result = await client.listMemories();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("HTTP 500");
+  });
+});
+
+describe("updateMemory", () => {
+  it("PATCHes the memory with a JSON body and Content-Type", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: "aaaaaaaa-1111-2222-3333-444444444444",
+          text: "fact",
+          state: "invalidated",
+          date: "2026-09-02T12:00:00+00:00",
+        }),
+      })
+    );
+
+    const result = await client.updateMemory("aaaaaaaa-1111-2222-3333-444444444444", {
+      state: "invalidated",
+      reason: "stale",
+    });
+
+    expect(result.success).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe(
+      "https://test.vectorize.io/v1/default/banks/test-bank/memories/aaaaaaaa-1111-2222-3333-444444444444"
+    );
+    const fetchInit = init as { method?: string; body?: string; headers?: Record<string, string> };
+    expect(fetchInit.method).toBe("PATCH");
+    expect(fetchInit.body).toBe(JSON.stringify({ state: "invalidated", reason: "stale" }));
+    expect(fetchInit.headers?.["Content-Type"]).toBe("application/json");
+  });
+
+  it("returns a timeout error when the request exceeds the timeout", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    (globalThis.fetch as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      createAbortAwareFetch()
+    );
+
+    const result = await client.updateMemory(
+      "aaaaaaaa-1111-2222-3333-444444444444",
+      { state: "valid" },
+      undefined,
+      50
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Operation timed out after 50ms");
+  });
+
+  it("returns a cancelled error when the signal is aborted", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    (globalThis.fetch as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      createAbortAwareFetch()
+    );
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 10);
+
+    const result = await client.updateMemory(
+      "aaaaaaaa-1111-2222-3333-444444444444",
+      { state: "valid" },
+      controller.signal,
+      5000
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Operation cancelled");
+  });
+});
+
 // ============================================
 // retain
 // ============================================
