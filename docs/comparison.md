@@ -3,6 +3,7 @@
 How epimetheus compares to other Hindsight integrations and the design decisions behind it.
 
 # Table of Contents
+
 - [Deviations from Official Integrations](#deviations-from-official-integrations)
 - [Comparison with Other Implementations](#comparison-with-other-implementations)
   - [The Point of the Comparison](#the-point-of-the-comparison)
@@ -125,6 +126,7 @@ For a brief comparison with `@luxusai/pi-hindsight`: I made [improvement suggest
 > **Note:** This comparison table was AI-generated. If anything is incorrect or outdated, please open a PR. I'm only 100% sure of the current features of my own plugin.
 
 ## Design Decisions
+
 - **First class support for old sessions** I want to be able to reingest old sessions later on after adjustments to my retain/observations missions or this extension's stripping configuration.
 - **Use a disk queue in case hindsight is down and to delay retention** There is intentionally no "retain every N turns" functionality (at least for now; make an issue if you need it). You generally will not need memories available for an in-progress session. You can flush on compact or manually flush in cases where you do.
 - **Use as much automatic tagging as possible**
@@ -142,9 +144,11 @@ For a brief comparison with `@luxusai/pi-hindsight`: I made [improvement suggest
 - **Interactive setup is planned** A basic setup wizard is on the roadmap, with agent-driven setup for more personalized/advanced configuration later.
 
 ## Oh My Pi Comparison
+
 Since OMP is an incompatible fork, it is not a direct alternative, but I am including some notes for anyone considering switching from OMP to Pi.
 
 OMP at the time of writing:
+
 - Loses retains if hindsight is down
 - Does not support ingesting old sessions
 - Does plain text retention instead of json/jsonl - misses useful information for extraction and doesn't allow Hindsight to prefer to not split messages into separate chunks
@@ -157,9 +161,11 @@ OMP at the time of writing:
 - Modifies the system prompt which breaks prompt caching if mental model content has changed on ttl refresh - this is a tradeoff, not necessarily wrong, but it's not how I would do it
 
 ## Features inspired by OMP
+
 - Getting project name based on primary git directory when in worktree
 
 ## Features inspired by anh-chu/pi-hindsight
+
 - Storing recalls in the session file and showing them in collapsible blocks with custom message renderer, but optional and opt-in
 - Removing specific tool types (e.g. `bash`), but more configurable
 - Use subcommands to avoid cluttering global command list
