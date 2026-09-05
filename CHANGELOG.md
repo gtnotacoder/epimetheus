@@ -2,6 +2,10 @@
 
 ## Pending
 
+### Features
+
+- **`hindsight_graph` tool** — Exposes the server's entity layer to agent turns. Lists the top entities of the co-occurrence graph and their typed edges (`A -[type]-> B`), expands around a seed entity with client-side depth/breadth caps (defaults: 2 hops, 20 nodes per hop), filters low-signal edges via `minCount`, and renders a compact token-budgeted edge list (default 800 tokens) with a `(truncated: N of M edges)` note — never raw JSON. Gated by `toolsEnabled` (`"graph"`), hidden in degraded mode like the other network tools, and excluded from retention by the default `toolFilter` (rendered co-occurrence lists would otherwise inflate mention counts).
+
 ### Fixed
 
 - **Auto-recall silently failing on slow banks** — recall had a hard-coded 10s timeout, but recall against large banks can take 8-30s, so auto-recall timed out and injected nothing every turn. The timeout is now configurable via `recallTimeoutMs` (default 30000ms, env `EPIMETHEUS_RECALL_TIMEOUT_MS`). On timeout, auto-recall retries once with a faster degraded retrieval (low budget, reduced max tokens, 5s ceiling) and injects the best-effort results with a one-line degradation note, so a slow bank degrades gracefully instead of silently recalling nothing. `/hindsight status` now shows the configured timeout and the session's degraded-fallback count. The `hindsight_recall` tool inherits the same configurable timeout (previously 10s). Known tradeoff: a timed-out auto-recall can delay a turn by up to ~35s (30s first attempt + 5s degraded retry) when the bank is too slow for both.

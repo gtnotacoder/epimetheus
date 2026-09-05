@@ -48,7 +48,7 @@ Configuration is stored in `<getAgentDir()>/epimetheus/config.json` or `config.j
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable or disable the extension. When `false`, the extension runs in a lightweight disabled mode (see [Disabled Mode](#disabled-mode)). |
-| `toolsEnabled` | `true` | Which tools to register: `true` (all), `false` (none), or array of tool names (`"retain"`, `"recall"`, `"reflect"`, `"set_extra_context"`, `"get_extra_context"`) |
+| `toolsEnabled` | `true` | Which tools to register: `true` (all), `false` (none), or array of tool names (`"retain"`, `"recall"`, `"reflect"`, `"graph"`, `"set_extra_context"`, `"get_extra_context"`) |
 | `autoRecallEnabled` | `true` | Automatically recall relevant memories before each LLM call |
 | `autoRetainEnabled` | `true` | Automatically queue messages for retention on `message_end` (see [Session Retention Control](#session-retention-control)) |
 | `autoRecallBudget` | `"mid"` | Recall retrieval budget. One of `"low"`, `"mid"`, `"high"`. Controls how many results Hindsight returns. |
@@ -335,7 +335,7 @@ Only applies when `toolCall` is in `retainContent.assistant` or `toolResult` is 
 {
   "toolFilter": {
     "toolCall": { "exclude": ["grep", "find", "ls", "read", "hindsight_retain"] },
-    "toolResult": { "exclude": ["grep", "find", "ls", "write", "edit", "hindsight_retain", "hindsight_recall", "hindsight_reflect"] }
+    "toolResult": { "exclude": ["grep", "find", "ls", "write", "edit", "hindsight_retain", "hindsight_recall", "hindsight_reflect", "hindsight_graph"] }
   }
 }
 ```
@@ -715,13 +715,14 @@ The `recallPromptPreamble` config option (shown inside the fence above) defaults
 
 # Tools
 
-When `toolsEnabled: true` (default), all tools are available. Set to an array of tool names (`"retain"`, `"recall"`, `"reflect"`, `"set_extra_context"`, `"get_extra_context"`) to register only specific tools, or `false` to disable all tools.
+When `toolsEnabled: true` (default), all tools are available. Set to an array of tool names (`"retain"`, `"recall"`, `"reflect"`, `"graph"`, `"set_extra_context"`, `"get_extra_context"`) to register only specific tools, or `false` to disable all tools.
 
 | Tool | Description |
 |------|-------------|
 | `hindsight_retain` | Store information to long-term memory. Queues to disk and retains on next flush. Use for facts, preferences, decisions, or any information worth remembering. |
 | `hindsight_recall` | Search long-term memory using multi-strategy retrieval. Supports filtering by tags, memory types (`world`/`experience`/`observation`), and budget. |
 | `hindsight_reflect` | Generate a synthesized answer from long-term memory. Unlike recall which returns raw facts, reflect uses the bank's identity, mental models, and multi-step reasoning to produce a contextual markdown answer. Best for questions requiring synthesis of multiple memories. |
+| `hindsight_graph` | Explore the entity co-occurrence graph. Lists top entities and their typed edges (`A -[type]-> B`). Use `seed` to expand around an entity (depth/breadth caps), `minCount` to filter low-signal edges, and `maxTokens` to bound the rendered output. |
 | `hindsight_set_extra_context` | Set extra context/caveats for Hindsight extraction. Appended to the context field (after session name) to help extraction correctly extract memories. See [Extra Context & Flush Guard](#extra-context--flush-guard). |
 | `hindsight_get_extra_context` | Get the current extra context set for this session. |
 
@@ -752,7 +753,7 @@ All commands are under `/hindsight <subcommand>`. With no subcommand, defaults t
 
 ## Canonical Hindsight tool names
 
-Epimetheus reserves these exact tool names: `hindsight_set_extra_context`, `hindsight_get_extra_context`, `hindsight_retain`, `hindsight_recall`, and `hindsight_reflect`. Its visibility manager may hide these names in degraded mode or according to retention settings. Extensions that register a tool with one of the same exact names are incompatible, even when the corresponding Epimetheus tool is disabled through `toolsEnabled`. Tools that merely share the `hindsight_` prefix but use another name are preserved.
+Epimetheus reserves these exact tool names: `hindsight_set_extra_context`, `hindsight_get_extra_context`, `hindsight_retain`, `hindsight_recall`, `hindsight_reflect`, and `hindsight_graph`. Its visibility manager may hide these names in degraded mode or according to retention settings. Extensions that register a tool with one of the same exact names are incompatible, even when the corresponding Epimetheus tool is disabled through `toolsEnabled`. Tools that merely share the `hindsight_` prefix but use another name are preserved.
 
 ## subagents
 

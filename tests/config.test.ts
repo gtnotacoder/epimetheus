@@ -195,6 +195,13 @@ describe("validateConfig", () => {
     expect(result.valid).toBe(true);
   });
 
+  it("accepts graph in toolsEnabled", () => {
+    const config = { ...validConfig, toolsEnabled: ["graph"] as ["graph"] };
+    const result = validateConfig(config);
+    expect(result.valid).toBe(true);
+    expect(config.toolsEnabled).toEqual(["graph"]);
+  });
+
   it("errors when retainContent.user is empty", () => {
     const config = {
       ...validConfig,
@@ -2215,6 +2222,7 @@ describe("loadConfig", () => {
         "hindsight_retain",
         "hindsight_recall",
         "hindsight_reflect",
+        "hindsight_graph",
       ],
     });
   });
@@ -2303,7 +2311,7 @@ describe("loadConfig", () => {
 
     const { errors } = validateConfig(config);
     expect(errors).toContain(
-      'epimetheus: toolFilter.toolResult.exclude cannot be empty. Using default: {"exclude":["grep","find","ls","write","edit","hindsight_retain","hindsight_recall","hindsight_reflect"]}.'
+      'epimetheus: toolFilter.toolResult.exclude cannot be empty. Using default: {"exclude":["grep","find","ls","write","edit","hindsight_retain","hindsight_recall","hindsight_reflect","hindsight_graph"]}.'
     );
     expect(config.toolFilter.toolResult).toEqual({
       exclude: [
@@ -2315,6 +2323,7 @@ describe("loadConfig", () => {
         "hindsight_retain",
         "hindsight_recall",
         "hindsight_reflect",
+        "hindsight_graph",
       ],
     });
   });

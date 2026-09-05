@@ -193,6 +193,7 @@ describe("real entrypoint bootstrap", () => {
     expect(toolNames).toContain("hindsight_retain");
     expect(toolNames).toContain("hindsight_recall");
     expect(toolNames).toContain("hindsight_reflect");
+    expect(toolNames).toContain("hindsight_graph");
   });
 
   it("logs the session-start phase when metadata initialization prevents tool registration", async () => {

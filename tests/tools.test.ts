@@ -118,6 +118,42 @@ function createMockClient(): HindsightClientWrapper {
   return {
     recall: mock(() => Promise.resolve({ success: true, response: { results: [] } })),
     reflect: mock(() => Promise.resolve({ success: true, response: { text: "" } })),
+    getEntityGraph: mock(() =>
+      Promise.resolve({
+        success: true,
+        response: {
+          nodes: [
+            { data: { id: "pi", label: "pi", mentionCount: 7566 } },
+            { data: { id: "assistant", label: "assistant", mentionCount: 3184 } },
+          ],
+          edges: [
+            {
+              data: {
+                id: "e1",
+                source: "pi",
+                target: "assistant",
+                linkType: "cooccurrence",
+                weight: 3184,
+              },
+            },
+          ],
+          total_entities: 2,
+          total_edges: 1,
+          limit: 1,
+        },
+      })
+    ),
+    getEntities: mock(() =>
+      Promise.resolve({
+        success: true,
+        response: {
+          items: [{ id: "pi", canonical_name: "pi", mention_count: 7566 }],
+          total: 1,
+          limit: 1,
+          offset: 0,
+        },
+      })
+    ),
     healthCheck: mock(() => Promise.resolve({ success: true })),
     retain: mock(() => Promise.resolve({ success: true })),
     retainBatch: mock(() => Promise.resolve({ success: true })),
@@ -1211,5 +1247,233 @@ describe("hindsight_get_extra_context", () => {
     expect(result.details.success).toBe(true);
     expect(result.details.extraContext).toBe("");
     expect(result.content[0]?.text).toContain("flush guard satisfied");
+  });
+});
+
+// ============================================
+// hindsight_graph tests
+// ============================================
+
+describe("hindsight_graph", () => {
+  it("is registered when toolsEnabled includes graph", async () => {
+    const pi = createMockPi();
+    registerTools(pi, { ...testConfig, toolsEnabled: ["graph"] }, createMockClient());
+    expect(pi.tools.map((t: ToolDef) => t.name)).toContain("hindsight_graph");
+  });
+
+  it("is not registered when toolsEnabled excludes graph", async () => {
+    const pi = createMockPi();
+    registerTools(pi, { ...testConfig, toolsEnabled: ["recall"] }, createMockClient());
+    expect(pi.tools.map((t: ToolDef) => t.name)).not.toContain("hindsight_graph");
+  });
+
+  it("is not registered when the client is null", async () => {
+    const pi = createMockPi();
+    registerTools(pi, testConfig, null);
+    expect(pi.tools.map((t: ToolDef) => t.name)).not.toContain("hindsight_graph");
+  });
+
+  it("renders typed edges around a seed on success", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { seed: "pi" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Entity graph around 'pi'");
+    expect(result.content[0]?.text).toContain("pi -[cooccurrence]-> assistant (w=3184)");
+  });
+
+  it("renders an overview without a seed", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Entity graph overview");
+    expect(result.content[0]?.text).toContain("pi (7566 mentions)");
+  });
+
+  it("passes minCount and a BFS-covering limit to client.getEntityGraph", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const graphMock = client.getEntityGraph as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    await tool!.execute("tc1", { minCount: 5 }, undefined, undefined, ctx);
+
+    const callArgs = graphMock.mock.calls[0]![0]!;
+    expect(callArgs.minCount).toBe(5);
+    // Default depth=2, breadth=20 → 20 + 400 = 420 edges.
+    expect(callArgs.limit).toBe(420);
+  });
+
+  it("forwards the abort signal to client.getEntityGraph", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const graphMock = client.getEntityGraph as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+    const controller = new AbortController();
+
+    await tool!.execute("tc1", {}, controller.signal, undefined, ctx);
+
+    expect(graphMock.mock.calls[0]![1]).toBe(controller.signal);
+  });
+
+  it("reports an entity that exists but has no edges in the fetched window", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    // Seed not in the fetched graph; the /entities scan finds it.
+    (client.getEntities as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: {
+        items: [{ id: "lonely", canonical_name: "lonely", mention_count: 5 }],
+        total: 1,
+        limit: 1,
+        offset: 0,
+      },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { seed: "lonely" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("has no edges in the top 420 co-occurrence edges");
+  });
+
+  it("reports an unknown entity with guidance", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.getEntities as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { items: [], total: 0, limit: 0, offset: 0 },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { seed: "unknown" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("not found");
+    expect(result.content[0]?.text).toContain("Call without a seed");
+  });
+
+  it("returns an error on client failure", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.getEntityGraph as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: false,
+      error: "HTTP 500",
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("Failed to fetch entity graph");
+    expect(result.details.error).toBe("HTTP 500");
+  });
+
+  it("reports an empty graph distinctly", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.getEntityGraph as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { nodes: [], edges: [], total_entities: 0, total_edges: 0, limit: 0 },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Entity graph is empty");
+  });
+});
+
+describe("hindsight_graph seed resolution", () => {
+  it("resolves a seed id via the /entities scan when absent from the fetched graph", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.getEntities as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: {
+        items: [{ id: "out-of-window-id", canonical_name: "other", mention_count: 5 }],
+        total: 1,
+        limit: 1,
+        offset: 0,
+      },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      { seed: "out-of-window-id" },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("id out-of-window-id");
+    expect(result.content[0]?.text).toContain("has no edges in the top 420 co-occurrence edges");
+  });
+
+  it("surfaces a /entities scan failure as an error instead of claiming the entity is absent", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.getEntities as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: false,
+      error: "HTTP 500",
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_graph");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { seed: "unknown" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("Failed to resolve entity 'unknown'");
+    expect(result.details.error).toBe("HTTP 500");
   });
 });

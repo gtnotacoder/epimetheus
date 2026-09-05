@@ -80,12 +80,19 @@ export type TagGroupInput = TagGroupLeaf | TagGroupAndInput | TagGroupOrInput | 
 /** Role used when injecting auto-recall messages into the LLM context. */
 export type AutoRecallRole = "user" | "assistant";
 
-export type ToolName = "retain" | "recall" | "reflect" | "set_extra_context" | "get_extra_context";
+export type ToolName =
+  | "retain"
+  | "recall"
+  | "reflect"
+  | "graph"
+  | "set_extra_context"
+  | "get_extra_context";
 
 const VALID_TOOL_NAMES: ToolName[] = [
   "retain",
   "recall",
   "reflect",
+  "graph",
   "set_extra_context",
   "get_extra_context",
 ];
@@ -193,6 +200,7 @@ const DEFAULT_CONFIG: HindsightConfig = {
         "hindsight_retain",
         "hindsight_recall",
         "hindsight_reflect",
+        "hindsight_graph",
       ],
     },
   },

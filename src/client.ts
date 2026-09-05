@@ -12,6 +12,7 @@ import {
   type ReflectResponse,
 } from "@vectorize-io/hindsight-client";
 import type { HindsightConfig, ObservationScopes, TagGroupInput, TagsMatch } from "./config";
+import type { EntityGraphResponse, EntityListResponse } from "./graph";
 
 export interface RetainOptions {
   content: string;
@@ -307,6 +308,102 @@ export class HindsightClientWrapper {
       return { success: true, response: result };
     } catch (e) {
       return { success: false, error: this.formatError(e) };
+    }
+  }
+
+  /**
+   * Fetch the entity co-occurrence graph via the server's REST endpoint
+   * (the SDK's HindsightClient has no graph methods, so this uses raw fetch
+   * like healthCheck). Returns the top-N edges by weight (N = limit).
+   */
+  async getEntityGraph(
+    options: { limit?: number; minCount?: number } = {},
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: EntityGraphResponse; error?: string }> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.minCount !== undefined) params.set("min_count", String(options.minCount));
+    const qs = params.toString();
+    const url = `${this.config.apiUrl}/v1/default/banks/${encodeURIComponent(this.config.bankId)}/entities/graph${qs ? `?${qs}` : ""}`;
+    return this.fetchJson<EntityGraphResponse>(url, signal, timeoutMs);
+  }
+
+  /**
+   * List entities via the server's REST endpoint (used for seed name
+   * resolution when a seed is not present in the fetched graph window).
+   */
+  async getEntities(
+    options: { limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: EntityListResponse; error?: string }> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.offset !== undefined) params.set("offset", String(options.offset));
+    const qs = params.toString();
+    const url = `${this.config.apiUrl}/v1/default/banks/${encodeURIComponent(this.config.bankId)}/entities${qs ? `?${qs}` : ""}`;
+    return this.fetchJson<EntityListResponse>(url, signal, timeoutMs);
+  }
+
+  /**
+   * Raw-fetch a JSON endpoint with Bearer auth, abort chaining, and a timeout.
+   * Mirrors healthCheck's controller pattern so the underlying request is
+   * actually cancelled on timeout/abort (withTimeout alone would leave it
+   * dangling). Omits the Authorization header when no apiKey is configured
+   * (LAN no-auth servers).
+   */
+  private async fetchJson<T>(
+    url: string,
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: T; error?: string }> {
+    const controller = new AbortController();
+    let timedOut = false;
+
+    // Chain external abort signal
+    let abortHandler: (() => void) | undefined;
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        abortHandler = () => controller.abort();
+        signal.addEventListener("abort", abortHandler);
+      }
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+
+      const headers: Record<string, string> = {};
+      if (this.config.apiKey) {
+        headers.Authorization = `Bearer ${this.config.apiKey}`;
+      }
+
+      const response = await fetch(url, { signal: controller.signal, headers });
+
+      if (response.ok) {
+        const data = (await response.json()) as T;
+        return { success: true, response: data };
+      }
+      return { success: false, error: `HTTP ${response.status}` };
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        if (timedOut) {
+          return { success: false, error: `Operation timed out after ${timeoutMs}ms` };
+        }
+        return { success: false, error: "Operation cancelled" };
+      }
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (abortHandler) {
+        signal?.removeEventListener("abort", abortHandler);
+      }
     }
   }
 

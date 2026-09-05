@@ -287,6 +287,118 @@ describe("getServerVersion", () => {
 });
 
 // ============================================
+// getEntityGraph / getEntities
+// ============================================
+
+describe("getEntityGraph", () => {
+  it("fetches the entity graph with the bank id, query params, and Bearer auth", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          nodes: [],
+          edges: [],
+          total_entities: 0,
+          total_edges: 0,
+          limit: 0,
+        }),
+      })
+    );
+
+    const result = await client.getEntityGraph({ limit: 420, minCount: 5 });
+
+    expect(result.success).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe(
+      "https://test.vectorize.io/v1/default/banks/test-bank/entities/graph?limit=420&min_count=5"
+    );
+    expect((init as { headers?: Record<string, string> }).headers?.Authorization).toBe(
+      "Bearer test-key"
+    );
+  });
+
+  it("omits the Authorization header when no apiKey is configured", async () => {
+    const client = new HindsightClientWrapper({ ...testConfig, apiKey: "" });
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ nodes: [], edges: [], total_entities: 0, total_edges: 0, limit: 0 }),
+      })
+    );
+
+    await client.getEntityGraph();
+
+    const init = fetchMock.mock.calls[0]![1] as { headers?: Record<string, string> };
+    expect(init.headers?.Authorization).toBeUndefined();
+  });
+
+  it("returns HTTP status error on non-OK responses", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    (globalThis.fetch as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      createAbortAwareFetch({ ok: false, status: 500 })
+    );
+
+    const result = await client.getEntityGraph();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("HTTP 500");
+  });
+
+  it("returns a timeout error when the request exceeds the timeout", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    (globalThis.fetch as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      createAbortAwareFetch()
+    );
+
+    const result = await client.getEntityGraph({}, undefined, 50);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Operation timed out after 50ms");
+  });
+
+  it("returns a cancelled error when the signal is aborted", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    (globalThis.fetch as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      createAbortAwareFetch()
+    );
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 10);
+
+    const result = await client.getEntityGraph({}, controller.signal, 5000);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Operation cancelled");
+  });
+});
+
+describe("getEntities", () => {
+  it("fetches the entity list with limit and offset", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], total: 0, limit: 0, offset: 0 }),
+      })
+    );
+
+    const result = await client.getEntities({ limit: 500, offset: 0 });
+
+    expect(result.success).toBe(true);
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(url).toBe(
+      "https://test.vectorize.io/v1/default/banks/test-bank/entities?limit=500&offset=0"
+    );
+  });
+});
+
+// ============================================
 // retain
 // ============================================
 

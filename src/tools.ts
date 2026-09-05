@@ -8,6 +8,7 @@ import type { Budget, RecallResponse, ReflectResponse } from "@vectorize-io/hind
 import { type Static, Type } from "typebox";
 import type { HindsightClientWrapper } from "./client";
 import type { HindsightConfig, MemoryType, ToolName } from "./config";
+import { renderEntityGraph, resolveSeedInGraph } from "./graph";
 import { getHindsightMeta, shouldSessionBeRetained, updateSessionMetadata } from "./meta";
 import { resolveProjectName } from "./project-config";
 import { queueToolRetain } from "./retention";
@@ -67,6 +68,11 @@ interface ReflectDetails {
 interface ExtraContextDetails {
   success: boolean;
   extraContext?: string;
+  error?: string;
+}
+
+interface GraphDetails {
+  success: boolean;
   error?: string;
 }
 
@@ -482,6 +488,157 @@ export function registerTools(
     });
   }
 
+  // Register hindsight_graph if enabled
+  if (isToolEnabled(config, "graph")) {
+    registered.push("hindsight_graph");
+    pi.registerTool({
+      name: "hindsight_graph",
+      label: "Hindsight Entity Graph",
+      description:
+        "Explore the entity co-occurrence graph. Lists top entities and their typed edges (A -[type]-> B). Use seed to expand around an entity (depth/breadth caps), minCount to filter low-signal edges.",
+      parameters: Type.Object({
+        seed: Type.Optional(
+          Type.String({
+            description:
+              "Entity id or name to expand around. Omit to list the top entities and their edges.",
+          })
+        ),
+        depth: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            maximum: 4,
+            description: "Hops from the seed entity. Default: 2.",
+          })
+        ),
+        breadth: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            maximum: 50,
+            description: "Max new nodes per hop. Default: 20.",
+          })
+        ),
+        maxTokens: Type.Optional(
+          Type.Integer({
+            minimum: 100,
+            maximum: 4000,
+            description: "Token budget for the rendered edge list. Default: 800.",
+          })
+        ),
+        minCount: Type.Optional(
+          Type.Integer({
+            minimum: 0,
+            description: "Minimum co-occurrence count for edges. Default: 0 (no filter).",
+          })
+        ),
+      }),
+
+      async execute(
+        _toolCallId,
+        params,
+        signal,
+        _onUpdate,
+        _ctx
+      ): Promise<AgentToolResult<GraphDetails>> {
+        const depth = params.depth ?? 2;
+        const breadth = params.breadth ?? 20;
+        const maxTokens = params.maxTokens ?? 800;
+        const minCount = params.minCount ?? 0;
+        // Fetch enough top edges to cover the BFS worst case (sum of b^k for
+        // k=1..depth), capped at 1000 to bound the request.
+        let fetchLimit = 0;
+        for (let k = 1; k <= depth; k++) {
+          fetchLimit += breadth ** k;
+        }
+        fetchLimit = Math.min(1000, fetchLimit);
+
+        const graphResult = await client.getEntityGraph({ limit: fetchLimit, minCount }, signal);
+        if (!graphResult.success) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Failed to fetch entity graph: ${graphResult.error ?? "unknown error"}`,
+              },
+            ],
+            details: { success: false, error: graphResult.error },
+          };
+        }
+        const graph = graphResult.response;
+        if (!graph || graph.nodes.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Entity graph is empty (no entities in this bank — check the bank id/config).",
+              },
+            ],
+            details: { success: true },
+          };
+        }
+
+        let seedNode: ReturnType<typeof resolveSeedInGraph> = null;
+        if (params.seed) {
+          seedNode = resolveSeedInGraph(graph, params.seed);
+          if (!seedNode) {
+            // The seed is not in the fetched top-N window. Distinguish
+            // "entity exists but has no strong edges" from "unknown entity"
+            // with a bounded scan of the top entities by mention count.
+            const listResult = await client.getEntities({ limit: 500 }, signal);
+            if (!listResult.success) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Failed to resolve entity '${params.seed}': ${listResult.error ?? "unknown error"}`,
+                  },
+                ],
+                details: { success: false, error: listResult.error },
+              };
+            }
+            const lower = params.seed.toLowerCase();
+            const matches = (listResult.response?.items ?? [])
+              .filter((i) => i.id === params.seed || i.canonical_name.toLowerCase() === lower)
+              .sort((a, b) => b.mention_count - a.mention_count);
+            const best = matches[0];
+            if (best) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Entity '${params.seed}' (id ${best.id}, ${best.mention_count} mentions) has no edges in the top ${fetchLimit} co-occurrence edges. Try higher breadth/depth or lower minCount.`,
+                  },
+                ],
+                details: { success: true },
+              };
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Entity '${params.seed}' not found (not in the top ${fetchLimit} co-occurrence edges and not in the top 500 entities by mention count). Call without a seed to list top entities.`,
+                },
+              ],
+              details: { success: true },
+            };
+          }
+        }
+
+        const text = renderEntityGraph(graph, {
+          seedNode: seedNode?.node,
+          ambiguousSeed: seedNode?.ambiguous,
+          depth,
+          breadth,
+          maxTokens,
+        });
+
+        return {
+          content: [{ type: "text", text }],
+          details: { success: true },
+        };
+      },
+    });
+  }
+
   setRegisteredHindsightTools(registered);
   return registered;
 }
@@ -498,6 +655,7 @@ const HINDSIGHT_OWNED_TOOLS = new Set([
   "hindsight_retain",
   "hindsight_recall",
   "hindsight_reflect",
+  "hindsight_graph",
 ]);
 
 /**
