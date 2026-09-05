@@ -53,9 +53,13 @@ export interface ReflectOptions {
    *  Default: 'low' (per Hindsight SDK). Reflect runs an agentic loop with up to 10 iterations
    *  of multi-tool search + LLM calls, so it is substantially slower than recall even at low budget. */
   budget?: Budget;
+  /** Request the based_on evidence list (memories/mental models/directives used).
+   *  The response's based_on field is only present when this is true. Used by
+   *  hindsight_reflect's provenance rendering. */
+  includeFacts?: boolean;
   // Not currently exposed (simplified HindsightClient wrapper doesn't support these;
   // the underlying ReflectRequest API supports fact_types, exclude_mental_models,
-  // exclude_mental_model_ids, tag_groups, max_tokens, include, response_schema):
+  // exclude_mental_model_ids, tag_groups, max_tokens, response_schema):
   // - fact_types / exclude_mental_models: can be added if the client SDK is updated
   //   or when switching to the generated SDK directly
   // - tag_groups: can be added for reflect similar to recall if needed but
@@ -63,7 +67,7 @@ export interface ReflectOptions {
   // - max_tokens: not currently configurable (default 4096 output)
   // - response_schema: not adding for now as structured output seems less useful
   //   for coding agent integration
-  // - include: can be added later if needed (for trace, facts, chunks, etc.)
+  // - include.trace / include.chunks: can be added later if needed
 }
 
 export class HindsightClientWrapper {
@@ -306,6 +310,7 @@ export class HindsightClientWrapper {
           tags: options.tags,
           tagsMatch: options.tagsMatch,
           budget: options.budget,
+          includeFacts: options.includeFacts,
         }),
         timeoutMs,
         signal

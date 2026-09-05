@@ -629,6 +629,75 @@ describe("hindsight_recall", () => {
     const callArgs = recallMock.mock.calls[0]![0]!;
     expect(callArgs.types).toEqual(["observation"]);
   });
+
+  it("renders a provenance line per result by default", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.recall as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: {
+        results: [
+          {
+            id: "aaaaaaaa-1111-2222-3333-444444444444",
+            text: "User prefers dark mode",
+            document_id: "019efc37-1fdd-7411-b5f7-dac95f7ef625",
+            context: "pi: theme discussion",
+            metadata: {},
+          },
+        ],
+      } as RecallResponse,
+    });
+    registerTools(pi, testConfig, client);
+    const recallTool = pi.tools.find((t: ToolDef) => t.name === "hindsight_recall");
+    const ctx = createMockContext();
+
+    const result = (await recallTool!.execute(
+      "tc1",
+      { query: "theme" },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("1. User prefers dark mode");
+    expect(result.content[0]?.text).toContain(
+      "[id: aaaaaaaa-1111-2222-3333-444444444444 | doc: 019efc37-1fdd-7411-b5f7-dac95f7ef625 | ctx: pi: theme discussion | scopes: -]"
+    );
+  });
+
+  it("strips provenance lines when provenance is false", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.recall as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: {
+        results: [
+          {
+            id: "aaaaaaaa-1111-2222-3333-444444444444",
+            text: "User prefers dark mode",
+            document_id: "019efc37-1fdd-7411-b5f7-dac95f7ef625",
+            context: "pi: theme discussion",
+            metadata: {},
+          },
+        ],
+      } as RecallResponse,
+    });
+    registerTools(pi, testConfig, client);
+    const recallTool = pi.tools.find((t: ToolDef) => t.name === "hindsight_recall");
+    const ctx = createMockContext();
+
+    const result = (await recallTool!.execute(
+      "tc1",
+      { query: "theme", provenance: false },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.content[0]?.text).toBe("1. User prefers dark mode");
+    expect(result.content[0]?.text).not.toContain("[id:");
+  });
 });
 
 // ============================================
@@ -706,6 +775,88 @@ describe("hindsight_reflect", () => {
     expect(result.details.success).toBe(false);
     expect(result.content[0]?.text).toContain("Failed to reflect");
     expect(result.details.error).toBe("timeout");
+  });
+
+  it("appends a Sources list when based_on memories are present", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.reflect as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: {
+        text: "The user prefers dark mode based on past interactions.",
+        based_on: {
+          memories: [
+            { id: "aaaaaaaa-1111-2222-3333-444444444444", text: "User chose dark mode in June." },
+            { id: "bbbbbbbb-1111-2222-3333-444444444444", text: "User dislikes light themes." },
+          ],
+        },
+      } as ReflectResponse,
+    });
+    registerTools(pi, testConfig, client);
+    const reflectTool = pi.tools.find((t: ToolDef) => t.name === "hindsight_reflect");
+    const ctx = createMockContext();
+
+    const result = (await reflectTool!.execute(
+      "tc1",
+      { query: "theme preference" },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain(
+      "The user prefers dark mode based on past interactions."
+    );
+    expect(result.content[0]?.text).toContain("Sources:");
+    expect(result.content[0]?.text).toContain(
+      "- aaaaaaaa | doc: - | User chose dark mode in June."
+    );
+    expect(result.content[0]?.text).toContain("- bbbbbbbb | doc: - | User dislikes light themes.");
+  });
+
+  it("requests includeFacts when provenance is on and omits it when off", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const reflectMock = client.reflect as unknown as ReturnType<typeof mock>;
+    reflectMock.mockResolvedValue({
+      success: true,
+      response: { text: "answer" } as ReflectResponse,
+    });
+    registerTools(pi, testConfig, client);
+    const reflectTool = pi.tools.find((t: ToolDef) => t.name === "hindsight_reflect");
+    const ctx = createMockContext();
+
+    await reflectTool!.execute("tc1", { query: "q" }, undefined, undefined, ctx);
+    expect(reflectMock.mock.calls[0]![0]!.includeFacts).toBe(true);
+
+    await reflectTool!.execute("tc1", { query: "q", provenance: false }, undefined, undefined, ctx);
+    expect(reflectMock.mock.calls[1]![0]!.includeFacts).toBe(false);
+  });
+
+  it("renders exactly the answer text when based_on is absent", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.reflect as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: {
+        text: "The user prefers dark mode based on past interactions.",
+      } as ReflectResponse,
+    });
+    registerTools(pi, testConfig, client);
+    const reflectTool = pi.tools.find((t: ToolDef) => t.name === "hindsight_reflect");
+    const ctx = createMockContext();
+
+    const result = (await reflectTool!.execute(
+      "tc1",
+      { query: "theme preference" },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.content[0]?.text).toBe("The user prefers dark mode based on past interactions.");
+    expect(result.content[0]?.text).not.toContain("Sources:");
   });
 });
 

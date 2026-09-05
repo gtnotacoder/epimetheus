@@ -833,6 +833,18 @@ describe("reflect", () => {
     sdk.reflect = origReflect;
   });
 
+  it("forwards includeFacts to the SDK reflect call", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const { sdk, origReflect } = mockSdkMethods(client);
+    sdk.reflect = mock(() => Promise.resolve({ text: "result" }));
+
+    await client.reflect({ query: "test", includeFacts: true });
+
+    const callOpts = (sdk.reflect as unknown as ReturnType<typeof mock>).mock.calls[0]![2];
+    expect(callOpts.includeFacts).toBe(true);
+    sdk.reflect = origReflect;
+  });
+
   it("returns error on failure", async () => {
     const client = new HindsightClientWrapper(testConfig);
     const { sdk, origReflect } = mockSdkMethods(client);

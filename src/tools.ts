@@ -17,6 +17,7 @@ import { renderMemories } from "./curate";
 import { renderEntityGraph, resolveSeedInGraph } from "./graph";
 import { getHindsightMeta, shouldSessionBeRetained, updateSessionMetadata } from "./meta";
 import { resolveProjectName } from "./project-config";
+import { renderRecallResults, renderReflectSources } from "./provenance";
 import { queueToolRetain } from "./retention";
 import {
   getRegisteredHindsightTools,
@@ -454,6 +455,12 @@ export function registerTools(
           })
         ),
         budget: Type.Optional(BudgetSchema),
+        provenance: Type.Optional(
+          Type.Boolean({
+            description:
+              "Include a provenance line per result (id, document_id, context snippet, observation scopes) so each fact's source can be judged. Read-only server metadata; nothing is written. Default: true. Set false to save tokens.",
+          })
+        ),
       }),
 
       async execute(
@@ -498,7 +505,7 @@ export function registerTools(
           };
         }
 
-        const text = results.map((r, i) => `${i + 1}. ${r.text}`).join("\n");
+        const text = renderRecallResults(results, { provenance: params.provenance ?? true });
 
         return {
           content: [{ type: "text", text }],
@@ -515,7 +522,7 @@ export function registerTools(
       name: "hindsight_reflect",
       label: "Hindsight Reflect",
       description:
-        "Synthesize an answer from memories using multi-step reasoning. Use recall for raw facts or observations and reflect for answers, topic summaries, etc. requiring synthesis across many memories. Budget defaults to 'low'; higher budgets are much slower and should only be used if necessary",
+        "Synthesize an answer from memories using multi-step reasoning. Use recall for raw facts or observations and reflect for answers, topic summaries, etc. requiring synthesis across many memories. Budget defaults to 'low'; higher budgets are much slower and should only be used if necessary. When provenance is on (default), the answer is followed by a Sources list (id + text snippet per source fact) so the synthesis is traceable to its inputs — read-only server metadata, nothing is written.",
       parameters: Type.Object({
         query: Type.String({ description: "Question to answer" }),
         tags: Type.Optional(
@@ -525,6 +532,12 @@ export function registerTools(
         ),
         tagsMatch: Type.Optional(TagsMatchSchema),
         budget: Type.Optional(BudgetSchema),
+        provenance: Type.Optional(
+          Type.Boolean({
+            description:
+              "Append a Sources list (the memory facts the answer is based on) after the answer. Read-only server metadata; nothing is written. Default: true. Set false to skip the source-facts request and save tokens.",
+          })
+        ),
       }),
 
       async execute(
@@ -534,12 +547,14 @@ export function registerTools(
         _onUpdate,
         _ctx
       ): Promise<AgentToolResult<ReflectDetails>> {
+        const provenance = params.provenance ?? true;
         const result = await client.reflect(
           {
             query: params.query,
             tags: params.tags,
             tagsMatch: params.tagsMatch as TagsMatch | undefined,
             budget: params.budget as Budget | undefined,
+            includeFacts: provenance,
           },
           signal
         );
@@ -563,8 +578,15 @@ export function registerTools(
           };
         }
 
+        // Append the source-facts list only when non-empty (no trailing
+        // blank line when based_on is absent or has no memories).
+        const sources = renderReflectSources(response?.based_on?.memories ?? [], {
+          provenance,
+        });
+        const content = sources ? `${text}\n\n${sources}` : text;
+
         return {
-          content: [{ type: "text", text }],
+          content: [{ type: "text", text: content }],
           details: { success: true, response },
         };
       },

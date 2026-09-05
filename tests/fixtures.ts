@@ -127,10 +127,27 @@ export function createMockClient(
     retainBatchResult?: { success: boolean; error?: string };
     recallResult?: {
       success: boolean;
-      response?: { results: Array<{ id: string; text: string }> };
+      response?: {
+        results: Array<{
+          id: string;
+          text: string;
+          document_id?: string | null;
+          context?: string | null;
+          metadata?: { [key: string]: string } | null;
+        }>;
+      };
       error?: string;
     };
-    reflectResult?: { success: boolean; response?: { text: string }; error?: string };
+    reflectResult?: {
+      success: boolean;
+      response?: {
+        text: string;
+        based_on?: {
+          memories?: Array<{ id?: string | null; text: string }>;
+        } | null;
+      };
+      error?: string;
+    };
   } = {}
 ): HindsightClientWrapper {
   return {
