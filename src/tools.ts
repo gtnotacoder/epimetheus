@@ -8,6 +8,7 @@ import type { Budget, RecallResponse, ReflectResponse } from "@vectorize-io/hind
 import { type Static, Type } from "typebox";
 import type { HindsightClientWrapper } from "./client";
 import type { HindsightConfig, MemoryType, ToolName } from "./config";
+import { CONSOLIDATION_TASK_TYPE, type OperationItem, renderOperations } from "./consolidation";
 import { renderEntityGraph, resolveSeedInGraph } from "./graph";
 import { getHindsightMeta, shouldSessionBeRetained, updateSessionMetadata } from "./meta";
 import { resolveProjectName } from "./project-config";
@@ -72,6 +73,11 @@ interface ExtraContextDetails {
 }
 
 interface GraphDetails {
+  success: boolean;
+  error?: string;
+}
+
+interface ConsolidateDetails {
   success: boolean;
   error?: string;
 }
@@ -639,6 +645,260 @@ export function registerTools(
     });
   }
 
+  // Register hindsight_consolidate if enabled
+  if (isToolEnabled(config, "consolidate")) {
+    registered.push("hindsight_consolidate");
+    pi.registerTool({
+      name: "hindsight_consolidate",
+      label: "Hindsight Consolidate",
+      description:
+        "Consolidation watchdog: check or act on the server's consolidation state. status lists pending/failed consolidation operations; trigger starts consolidation (async and deduplicated server-side — reports the operation_id, does not poll to completion; re-run status later); recover retries failed consolidations. auto recovers failed ops first, then triggers when pending exceeds threshold.",
+      parameters: Type.Object({
+        mode: Type.Optional(
+          Type.Union([Type.Literal("status"), Type.Literal("trigger"), Type.Literal("recover")], {
+            description: "Action: status (default), trigger, or recover.",
+          })
+        ),
+        auto: Type.Optional(
+          Type.Boolean({
+            description:
+              "When true, run the watchdog flow (overrides mode): recover failed consolidations first, then trigger when pending exceeds threshold. Default: false.",
+          })
+        ),
+        threshold: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            maximum: 50,
+            description:
+              "Pending consolidation count that triggers a new consolidation in auto mode. Default: 5.",
+          })
+        ),
+        maxTokens: Type.Optional(
+          Type.Integer({
+            minimum: 100,
+            maximum: 4000,
+            description: "Token budget for the rendered operation list. Default: 600.",
+          })
+        ),
+        observationScopes: Type.Optional(
+          Type.Array(Type.Array(Type.String()), {
+            description:
+              "Tag scopes to consolidate (trigger mode). Each scope is a list of tags; only unconsolidated memories matching at least one scope are processed. Omit to consolidate all.",
+          })
+        ),
+      }),
+
+      async execute(
+        _toolCallId,
+        params,
+        signal,
+        _onUpdate,
+        _ctx
+      ): Promise<AgentToolResult<ConsolidateDetails>> {
+        const mode = params.auto ? "auto" : (params.mode ?? "status");
+        const threshold = params.threshold ?? 5;
+        const maxTokens = params.maxTokens ?? 600;
+
+        // Fetch pending + failed operations in parallel (bounded at 50 each).
+        const fetchSnapshot = async (): Promise<
+          | {
+              ok: true;
+              pending: OperationItem[];
+              failed: OperationItem[];
+              pendingTotal: number;
+              failedTotal: number;
+              pendingCapped: boolean;
+              failedCapped: boolean;
+            }
+          | { ok: false; error: string }
+        > => {
+          const [pendingResult, failedResult] = await Promise.all([
+            client.getOperations({ status: "pending", limit: 50 }, signal),
+            client.getOperations({ status: "failed", limit: 50 }, signal),
+          ]);
+          if (!pendingResult.success) {
+            return {
+              ok: false,
+              error: `Failed to list pending operations: ${pendingResult.error ?? "unknown error"}`,
+            };
+          }
+          if (!failedResult.success) {
+            return {
+              ok: false,
+              error: `Failed to list failed operations: ${failedResult.error ?? "unknown error"}`,
+            };
+          }
+          const pending = pendingResult.response?.operations ?? [];
+          const failed = failedResult.response?.operations ?? [];
+          return {
+            ok: true,
+            pending,
+            failed,
+            pendingTotal: pendingResult.response?.total ?? pending.length,
+            failedTotal: failedResult.response?.total ?? failed.length,
+            pendingCapped: pending.length >= 50,
+            failedCapped: failed.length >= 50,
+          };
+        };
+
+        const consolidationOps = (ops: OperationItem[]): OperationItem[] =>
+          ops.filter((o) => o.task_type === CONSOLIDATION_TASK_TYPE);
+
+        if (mode === "status") {
+          const snapshot = await fetchSnapshot();
+          if (!snapshot.ok) {
+            return {
+              content: [{ type: "text", text: snapshot.error }],
+              details: { success: false, error: snapshot.error },
+            };
+          }
+          const ops = [...consolidationOps(snapshot.pending), ...consolidationOps(snapshot.failed)];
+          return {
+            content: [{ type: "text", text: renderOperations(ops, { maxTokens }) }],
+            details: { success: true },
+          };
+        }
+
+        if (mode === "trigger") {
+          // Drop empty inner scopes; an empty result means "consolidate all".
+          const scopes = (params.observationScopes ?? []).filter((s) => s.length > 0);
+          const result = await client.consolidate(
+            scopes.length > 0 ? { observationScopes: scopes } : {},
+            signal
+          );
+          if (!result.success) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed to trigger consolidation: ${result.error ?? "unknown error"}`,
+                },
+              ],
+              details: { success: false, error: result.error },
+            };
+          }
+          const opId = result.response?.operation_id ?? "unknown";
+          const dedupNote = result.response?.deduplicated
+            ? " (deduplicated — existing pending task reused)"
+            : "";
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Consolidation triggered: operation ${opId}${dedupNote}`,
+              },
+            ],
+            details: { success: true },
+          };
+        }
+
+        if (mode === "recover") {
+          const result = await client.recoverConsolidation(signal);
+          if (!result.success) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed to recover consolidations: ${result.error ?? "unknown error"}`,
+                },
+              ],
+              details: { success: false, error: result.error },
+            };
+          }
+          const count = result.response?.retried_count ?? 0;
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Recovered ${count} failed consolidation operation(s).`,
+              },
+            ],
+            details: { success: true },
+          };
+        }
+
+        if (mode === "auto") {
+          const snapshot = await fetchSnapshot();
+          if (!snapshot.ok) {
+            return {
+              content: [{ type: "text", text: snapshot.error }],
+              details: { success: false, error: snapshot.error },
+            };
+          }
+          const failedOps = consolidationOps(snapshot.failed);
+          const pendingOps = consolidationOps(snapshot.pending);
+          const lines: string[] = [];
+
+          // Recover first when failed consolidation ops exist.
+          if (failedOps.length > 0) {
+            const result = await client.recoverConsolidation(signal);
+            if (!result.success) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Failed to recover consolidations: ${result.error ?? "unknown error"}`,
+                  },
+                ],
+                details: { success: false, error: result.error },
+              };
+            }
+            lines.push(
+              `Recovered ${result.response?.retried_count ?? 0} failed consolidation operation(s).`
+            );
+          } else {
+            lines.push("No failed consolidation operations to recover.");
+          }
+
+          // Threshold check on the client-filtered consolidation count.
+          // The server's `total` is status-filtered but NOT task_type-filtered,
+          // so it cannot stand in for a consolidation count. When the fetched
+          // page hit the cap, note the uncertainty instead of guessing.
+          const pendingCount = pendingOps.length;
+          if (snapshot.pendingCapped) {
+            lines.push(
+              `(pending list capped at 50; server total ${snapshot.pendingTotal} — consolidation count may be understated)`
+            );
+          }
+          if (pendingCount > threshold) {
+            const result = await client.consolidate({}, signal);
+            if (!result.success) {
+              lines.push(`Failed to trigger consolidation: ${result.error ?? "unknown error"}`);
+              return {
+                content: [{ type: "text", text: lines.join("\n") }],
+                details: { success: false, error: result.error },
+              };
+            }
+            const opId = result.response?.operation_id ?? "unknown";
+            const dedupNote = result.response?.deduplicated
+              ? " (deduplicated — existing pending task reused)"
+              : "";
+            lines.push(`Consolidation triggered: operation ${opId}${dedupNote}`);
+          } else {
+            lines.push(
+              `Pending consolidation count ${pendingCount} ≤ threshold ${threshold} — nothing to trigger.`
+            );
+          }
+
+          return {
+            content: [{ type: "text", text: lines.join("\n") }],
+            details: { success: true },
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Unknown mode '${String(mode)}'. Valid modes: status, trigger, recover.`,
+            },
+          ],
+          details: { success: false, error: `unknown mode: ${String(mode)}` },
+        };
+      },
+    });
+  }
+
   setRegisteredHindsightTools(registered);
   return registered;
 }
@@ -656,6 +916,7 @@ const HINDSIGHT_OWNED_TOOLS = new Set([
   "hindsight_recall",
   "hindsight_reflect",
   "hindsight_graph",
+  "hindsight_consolidate",
 ]);
 
 /**

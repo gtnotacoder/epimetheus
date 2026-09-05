@@ -87,6 +87,8 @@ For a brief comparison with `@luxusai/pi-hindsight`: I made [improvement suggest
 | `hindsight_retain` | ✅ | ✅ | ✅ | ✅ |
 | `hindsight_retain` with scope param | ✅ (config) | ❌ | ✅ | ❌ |
 | `hindsight_reflect` | ✅ | ✅ | ✅ | ✅¹⁰ |
+| `hindsight_graph` | ✅ | ❌ | ❌ | ❌ |
+| `hindsight_consolidate` | ✅ | ❌ | ❌ | ❌ |
 | `hindsight_bank_profile` | ❌ | ❌ | ❌ | ✅ |
 | **Legacy Support** |
 | Bootstrap/import existing sessions | ✅ | ❌ | ✅ | ❌ |

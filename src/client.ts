@@ -12,6 +12,11 @@ import {
   type ReflectResponse,
 } from "@vectorize-io/hindsight-client";
 import type { HindsightConfig, ObservationScopes, TagGroupInput, TagsMatch } from "./config";
+import type {
+  ConsolidationResponse,
+  OperationsListResponse,
+  RecoverConsolidationResponse,
+} from "./consolidation";
 import type { EntityGraphResponse, EntityListResponse } from "./graph";
 
 export interface RetainOptions {
@@ -347,16 +352,74 @@ export class HindsightClientWrapper {
   }
 
   /**
+   * List operations via the server's REST endpoint (the SDK's HindsightClient
+   * has no operations methods, so this uses raw fetch like getEntityGraph).
+   * The `status` query param filters server-side (pending/processing/
+   * completed/failed/cancelled).
+   */
+  async getOperations(
+    options: { status?: string; limit?: number } = {},
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: OperationsListResponse; error?: string }> {
+    const params = new URLSearchParams();
+    if (options.status !== undefined) params.set("status", options.status);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    const qs = params.toString();
+    const url = `${this.config.apiUrl}/v1/default/banks/${encodeURIComponent(this.config.bankId)}/operations${qs ? `?${qs}` : ""}`;
+    return this.fetchJson<OperationsListResponse>(url, signal, timeoutMs);
+  }
+
+  /**
+   * Trigger consolidation via POST /consolidate. Always sends a JSON body
+   * (bodyless POST behavior is unverified; the server accepts an empty
+   * object). Returns the async operation id; deduplicated=true means an
+   * existing pending task was reused.
+   */
+  async consolidate(
+    options: { observationScopes?: string[][] } = {},
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: ConsolidationResponse; error?: string }> {
+    const url = `${this.config.apiUrl}/v1/default/banks/${encodeURIComponent(this.config.bankId)}/consolidate`;
+    const body: { observation_scopes?: string[][] } = {};
+    if (options.observationScopes !== undefined) {
+      body.observation_scopes = options.observationScopes;
+    }
+    return this.fetchJson<ConsolidationResponse>(url, signal, timeoutMs, {
+      method: "POST",
+      body,
+    });
+  }
+
+  /**
+   * Retry failed consolidations via POST /consolidation/recover.
+   * Returns the number of retried operations.
+   */
+  async recoverConsolidation(
+    signal?: AbortSignal,
+    timeoutMs: number = 30000
+  ): Promise<{ success: boolean; response?: RecoverConsolidationResponse; error?: string }> {
+    const url = `${this.config.apiUrl}/v1/default/banks/${encodeURIComponent(this.config.bankId)}/consolidation/recover`;
+    return this.fetchJson<RecoverConsolidationResponse>(url, signal, timeoutMs, {
+      method: "POST",
+      body: {},
+    });
+  }
+
+  /**
    * Raw-fetch a JSON endpoint with Bearer auth, abort chaining, and a timeout.
    * Mirrors healthCheck's controller pattern so the underlying request is
    * actually cancelled on timeout/abort (withTimeout alone would leave it
    * dangling). Omits the Authorization header when no apiKey is configured
-   * (LAN no-auth servers).
+   * (LAN no-auth servers). `init` (4th param, after timeoutMs) adds POST
+   * support: method + JSON body with Content-Type: application/json.
    */
   private async fetchJson<T>(
     url: string,
     signal?: AbortSignal,
-    timeoutMs: number = 30000
+    timeoutMs: number = 30000,
+    init?: { method?: string; body?: unknown }
   ): Promise<{ success: boolean; response?: T; error?: string }> {
     const controller = new AbortController();
     let timedOut = false;
@@ -383,8 +446,16 @@ export class HindsightClientWrapper {
       if (this.config.apiKey) {
         headers.Authorization = `Bearer ${this.config.apiKey}`;
       }
+      const fetchInit: RequestInit = { signal: controller.signal, headers };
+      if (init?.method) {
+        fetchInit.method = init.method;
+      }
+      if (init?.body !== undefined) {
+        fetchInit.body = JSON.stringify(init.body);
+        headers["Content-Type"] = "application/json";
+      }
 
-      const response = await fetch(url, { signal: controller.signal, headers });
+      const response = await fetch(url, fetchInit);
 
       if (response.ok) {
         const data = (await response.json()) as T;

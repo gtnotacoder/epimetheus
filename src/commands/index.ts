@@ -110,6 +110,7 @@ const HINDSIGHT_TOOL_SHORT_NAMES: readonly ToolName[] = [
   "recall",
   "reflect",
   "graph",
+  "consolidate",
   "set_extra_context",
   "get_extra_context",
 ];

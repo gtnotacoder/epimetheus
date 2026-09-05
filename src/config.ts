@@ -85,6 +85,7 @@ export type ToolName =
   | "recall"
   | "reflect"
   | "graph"
+  | "consolidate"
   | "set_extra_context"
   | "get_extra_context";
 
@@ -93,6 +94,7 @@ const VALID_TOOL_NAMES: ToolName[] = [
   "recall",
   "reflect",
   "graph",
+  "consolidate",
   "set_extra_context",
   "get_extra_context",
 ];
@@ -201,6 +203,7 @@ const DEFAULT_CONFIG: HindsightConfig = {
         "hindsight_recall",
         "hindsight_reflect",
         "hindsight_graph",
+        "hindsight_consolidate",
       ],
     },
   },

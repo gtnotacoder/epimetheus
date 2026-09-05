@@ -399,6 +399,113 @@ describe("getEntities", () => {
 });
 
 // ============================================
+// getOperations / consolidate / recoverConsolidation
+// ============================================
+
+describe("getOperations", () => {
+  it("fetches operations with the status filter and limit", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          bank_id: "test-bank",
+          total: 0,
+          limit: 50,
+          offset: 0,
+          operations: [],
+        }),
+      })
+    );
+
+    const result = await client.getOperations({ status: "pending", limit: 50 });
+
+    expect(result.success).toBe(true);
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(url).toBe(
+      "https://test.vectorize.io/v1/default/banks/test-bank/operations?status=pending&limit=50"
+    );
+  });
+
+  it("returns HTTP status error on non-OK responses", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    (globalThis.fetch as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      createAbortAwareFetch({ ok: false, status: 500 })
+    );
+
+    const result = await client.getOperations();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("HTTP 500");
+  });
+});
+
+describe("consolidate", () => {
+  it("POSTs to /consolidate with a JSON body and Content-Type", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ operation_id: "op-1", deduplicated: false }),
+      })
+    );
+
+    const result = await client.consolidate({ observationScopes: [["topic:a"]] });
+
+    expect(result.success).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://test.vectorize.io/v1/default/banks/test-bank/consolidate");
+    const fetchInit = init as { method?: string; body?: string; headers?: Record<string, string> };
+    expect(fetchInit.method).toBe("POST");
+    expect(fetchInit.body).toBe(JSON.stringify({ observation_scopes: [["topic:a"]] }));
+    expect(fetchInit.headers?.["Content-Type"]).toBe("application/json");
+  });
+
+  it("sends an empty JSON body when observationScopes is omitted", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ operation_id: "op-2", deduplicated: true }),
+      })
+    );
+
+    await client.consolidate();
+
+    const init = fetchMock.mock.calls[0]![1] as { body?: string };
+    expect(init.body).toBe("{}");
+  });
+});
+
+describe("recoverConsolidation", () => {
+  it("POSTs to /consolidation/recover and returns the retried count", async () => {
+    const client = new HindsightClientWrapper(testConfig);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    fetchMock.mockImplementationOnce(
+      createAbortAwareFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ retried_count: 3 }),
+      })
+    );
+
+    const result = await client.recoverConsolidation();
+
+    expect(result.success).toBe(true);
+    expect(result.response?.retried_count).toBe(3);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://test.vectorize.io/v1/default/banks/test-bank/consolidation/recover");
+    expect((init as { method?: string }).method).toBe("POST");
+  });
+});
+
+// ============================================
 // retain
 // ============================================
 

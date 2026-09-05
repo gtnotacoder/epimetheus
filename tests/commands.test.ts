@@ -2295,10 +2295,11 @@ describe("registerCommands", () => {
         "hindsight_recall",
         "hindsight_reflect",
         "hindsight_graph",
+        "hindsight_consolidate",
         "hindsight_set_extra_context",
         "hindsight_get_extra_context",
       ]);
-      // Make all six hindsight tools active so every per-tool line is "active".
+      // Make all seven hindsight tools active so every per-tool line is "active".
       mockActiveTools = [
         "read",
         "bash",
@@ -2311,6 +2312,7 @@ describe("registerCommands", () => {
         "hindsight_recall",
         "hindsight_reflect",
         "hindsight_graph",
+        "hindsight_consolidate",
         "hindsight_set_extra_context",
         "hindsight_get_extra_context",
       ];
@@ -2325,12 +2327,23 @@ describe("registerCommands", () => {
           origin: "top-level",
         },
       });
+      mockAllTools.push({
+        name: "hindsight_consolidate",
+        description: "consolidate",
+        parameters: {},
+        sourceInfo: {
+          path: "<extension>:hindsight_consolidate",
+          source: "extension",
+          scope: "project",
+          origin: "top-level",
+        },
+      });
       await getHandler()("active-tools", makeCtx());
       const msg = lastNotification!.message;
       // Keeps the original active-tools summary.
-      expect(msg).toContain("Active tools (13):");
+      expect(msg).toContain("Active tools (14):");
       expect(msg).toContain(
-        "hindsight: [hindsight_retain, hindsight_recall, hindsight_reflect, hindsight_graph, hindsight_set_extra_context, hindsight_get_extra_context]"
+        "hindsight: [hindsight_retain, hindsight_recall, hindsight_reflect, hindsight_graph, hindsight_consolidate, hindsight_set_extra_context, hindsight_get_extra_context]"
       );
       // Shows registration breakdown.
       expect(msg).toContain("== Hindsight Tool Registration ==");

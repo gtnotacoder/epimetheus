@@ -154,6 +154,27 @@ function createMockClient(): HindsightClientWrapper {
         },
       })
     ),
+    getOperations: mock(() =>
+      Promise.resolve({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 0,
+          limit: 50,
+          offset: 0,
+          operations: [],
+        },
+      })
+    ),
+    consolidate: mock(() =>
+      Promise.resolve({
+        success: true,
+        response: { operation_id: "op-1", deduplicated: false },
+      })
+    ),
+    recoverConsolidation: mock(() =>
+      Promise.resolve({ success: true, response: { retried_count: 0 } })
+    ),
     healthCheck: mock(() => Promise.resolve({ success: true })),
     retain: mock(() => Promise.resolve({ success: true })),
     retainBatch: mock(() => Promise.resolve({ success: true })),
@@ -1475,5 +1496,528 @@ describe("hindsight_graph seed resolution", () => {
     expect(result.details.success).toBe(false);
     expect(result.content[0]?.text).toContain("Failed to resolve entity 'unknown'");
     expect(result.details.error).toBe("HTTP 500");
+  });
+});
+
+// ============================================
+// hindsight_consolidate tests
+// ============================================
+
+describe("hindsight_consolidate", () => {
+  it("is registered when toolsEnabled includes consolidate", async () => {
+    const pi = createMockPi();
+    registerTools(pi, { ...testConfig, toolsEnabled: ["consolidate"] }, createMockClient());
+    expect(pi.tools.map((t: ToolDef) => t.name)).toContain("hindsight_consolidate");
+  });
+
+  it("is not registered when toolsEnabled excludes consolidate", async () => {
+    const pi = createMockPi();
+    registerTools(pi, { ...testConfig, toolsEnabled: ["recall"] }, createMockClient());
+    expect(pi.tools.map((t: ToolDef) => t.name)).not.toContain("hindsight_consolidate");
+  });
+
+  it("is not registered when the client is null", async () => {
+    const pi = createMockPi();
+    registerTools(pi, testConfig, null);
+    expect(pi.tools.map((t: ToolDef) => t.name)).not.toContain("hindsight_consolidate");
+  });
+
+  it("status mode renders pending and failed consolidation operations", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const opsMock = client.getOperations as unknown as ReturnType<typeof mock>;
+    opsMock
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 1,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "aaaaaaaa-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-18T13:34:51+00:00",
+            },
+            {
+              id: "dddddddd-1111-2222-3333-444444444444",
+              task_type: "ingest",
+              status: "pending",
+              items_count: 1,
+              created_at: "2026-09-05T11:00:00+00:00",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 1,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "bbbbbbbb-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "failed",
+              items_count: 12,
+              created_at: "2026-09-04T10:00:00+00:00",
+              error_message: "worker crashed",
+              retry_count: 2,
+            },
+          ],
+        },
+      });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("aaaaaaaa consolidation pending");
+    expect(result.content[0]?.text).toContain("bbbbbbbb consolidation failed");
+    expect(result.content[0]?.text).toContain("(retries: 2)");
+    // Non-consolidation task types are filtered out client-side.
+    expect(result.content[0]?.text).not.toContain("dddddddd");
+  });
+
+  it("status mode renders the empty message when there are no consolidation ops", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toBe("No pending or failed consolidation operations.");
+  });
+
+  it("trigger mode reports the operation id and deduplicated note", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.consolidate as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { operation_id: "op-42", deduplicated: true },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { mode: "trigger" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Consolidation triggered: operation op-42");
+    expect(result.content[0]?.text).toContain("deduplicated");
+  });
+
+  it("trigger mode passes observationScopes and drops empty scopes", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const consolidateMock = client.consolidate as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    await tool!.execute(
+      "tc1",
+      { mode: "trigger", observationScopes: [["topic:a"], []] },
+      undefined,
+      undefined,
+      ctx
+    );
+
+    const callArgs = consolidateMock.mock.calls[0]![0]!;
+    expect(callArgs.observationScopes).toEqual([["topic:a"]]);
+  });
+
+  it("recover mode reports the retried count", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.recoverConsolidation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { retried_count: 3 },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { mode: "recover" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean };
+    };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toBe("Recovered 3 failed consolidation operation(s).");
+  });
+
+  it("auto mode recovers failed ops then triggers when pending exceeds threshold", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const opsMock = client.getOperations as unknown as ReturnType<typeof mock>;
+    opsMock
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 1,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "aaaaaaaa-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-18T13:34:51+00:00",
+            },
+            {
+              id: "eeeeeeee-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-19T13:34:51+00:00",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 1,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "bbbbbbbb-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "failed",
+              items_count: 12,
+              created_at: "2026-09-04T10:00:00+00:00",
+            },
+          ],
+        },
+      });
+    (client.recoverConsolidation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { retried_count: 1 },
+    });
+    (client.consolidate as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { operation_id: "op-7", deduplicated: false },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      { auto: true, threshold: 1 },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Recovered 1 failed consolidation operation(s).");
+    expect(result.content[0]?.text).toContain("Consolidation triggered: operation op-7");
+  });
+
+  it("auto mode recovers but does not trigger when pending is at or below threshold", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const opsMock = client.getOperations as unknown as ReturnType<typeof mock>;
+    opsMock
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 1,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "aaaaaaaa-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-18T13:34:51+00:00",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 1,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "bbbbbbbb-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "failed",
+              items_count: 12,
+              created_at: "2026-09-04T10:00:00+00:00",
+            },
+          ],
+        },
+      });
+    (client.recoverConsolidation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { retried_count: 1 },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      { auto: true, threshold: 5 },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("Recovered 1 failed consolidation operation(s).");
+    expect(result.content[0]?.text).toContain("nothing to trigger");
+    expect(client.consolidate as unknown as ReturnType<typeof mock>).not.toHaveBeenCalled();
+  });
+
+  it("auto mode triggers without recovering when there are no failed ops", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const opsMock = client.getOperations as unknown as ReturnType<typeof mock>;
+    opsMock
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 2,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "aaaaaaaa-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-18T13:34:51+00:00",
+            },
+            {
+              id: "eeeeeeee-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-19T13:34:51+00:00",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 0,
+          limit: 50,
+          offset: 0,
+          operations: [],
+        },
+      });
+    (client.consolidate as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { operation_id: "op-9", deduplicated: false },
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      { auto: true, threshold: 1 },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("No failed consolidation operations to recover.");
+    expect(result.content[0]?.text).toContain("Consolidation triggered: operation op-9");
+    expect(
+      client.recoverConsolidation as unknown as ReturnType<typeof mock>
+    ).not.toHaveBeenCalled();
+  });
+
+  it("auto mode reports nothing to do when there are no failed ops and pending is low", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      { auto: true, threshold: 5 },
+      undefined,
+      undefined,
+      ctx
+    )) as { content: Array<{ type: string; text: string }>; details: { success: boolean } };
+
+    expect(result.details.success).toBe(true);
+    expect(result.content[0]?.text).toContain("No failed consolidation operations to recover.");
+    expect(result.content[0]?.text).toContain("nothing to trigger");
+    expect(
+      client.recoverConsolidation as unknown as ReturnType<typeof mock>
+    ).not.toHaveBeenCalled();
+    expect(client.consolidate as unknown as ReturnType<typeof mock>).not.toHaveBeenCalled();
+  });
+
+  it("fails with the valid mode list on an unknown mode", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", { mode: "bogus" }, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("Unknown mode 'bogus'");
+    expect(result.content[0]?.text).toContain("status, trigger, recover");
+  });
+
+  it("returns an error on client failure", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    (client.getOperations as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: false,
+      error: "HTTP 500",
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute("tc1", {}, undefined, undefined, ctx)) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    expect(result.content[0]?.text).toContain("Failed to list pending operations");
+    expect(result.details.error).toContain("HTTP 500");
+  });
+
+  it("forwards the abort signal to client calls", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const opsMock = client.getOperations as unknown as ReturnType<typeof mock>;
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+    const controller = new AbortController();
+
+    await tool!.execute("tc1", {}, controller.signal, undefined, ctx);
+
+    expect(opsMock.mock.calls[0]![1]).toBe(controller.signal);
+  });
+});
+
+describe("hindsight_consolidate auto failure reporting", () => {
+  it("reports the recovery that already happened when the trigger then fails", async () => {
+    const pi = createMockPi();
+    const client = createMockClient();
+    const opsMock = client.getOperations as unknown as ReturnType<typeof mock>;
+    opsMock
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 2,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "aaaaaaaa-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-18T13:34:51+00:00",
+            },
+            {
+              id: "eeeeeeee-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "pending",
+              items_count: 0,
+              created_at: "2026-08-19T13:34:51+00:00",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          bank_id: "test-bank",
+          total: 1,
+          limit: 50,
+          offset: 0,
+          operations: [
+            {
+              id: "bbbbbbbb-1111-2222-3333-444444444444",
+              task_type: "consolidation",
+              status: "failed",
+              items_count: 12,
+              created_at: "2026-09-04T10:00:00+00:00",
+            },
+          ],
+        },
+      });
+    (client.recoverConsolidation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      response: { retried_count: 1 },
+    });
+    (client.consolidate as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: false,
+      error: "HTTP 500",
+    });
+    registerTools(pi, testConfig, client);
+    const tool = pi.tools.find((t: ToolDef) => t.name === "hindsight_consolidate");
+    const ctx = createMockContext();
+
+    const result = (await tool!.execute(
+      "tc1",
+      { auto: true, threshold: 1 },
+      undefined,
+      undefined,
+      ctx
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      details: { success: boolean; error: string };
+    };
+
+    expect(result.details.success).toBe(false);
+    // The recovery that already happened is still reported.
+    expect(result.content[0]?.text).toContain("Recovered 1 failed consolidation operation(s).");
+    expect(result.content[0]?.text).toContain("Failed to trigger consolidation: HTTP 500");
   });
 });

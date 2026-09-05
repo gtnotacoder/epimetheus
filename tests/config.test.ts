@@ -202,6 +202,13 @@ describe("validateConfig", () => {
     expect(config.toolsEnabled).toEqual(["graph"]);
   });
 
+  it("accepts consolidate in toolsEnabled", () => {
+    const config = { ...validConfig, toolsEnabled: ["consolidate"] as ["consolidate"] };
+    const result = validateConfig(config);
+    expect(result.valid).toBe(true);
+    expect(config.toolsEnabled).toEqual(["consolidate"]);
+  });
+
   it("errors when retainContent.user is empty", () => {
     const config = {
       ...validConfig,
@@ -2223,6 +2230,7 @@ describe("loadConfig", () => {
         "hindsight_recall",
         "hindsight_reflect",
         "hindsight_graph",
+        "hindsight_consolidate",
       ],
     });
   });
@@ -2311,7 +2319,7 @@ describe("loadConfig", () => {
 
     const { errors } = validateConfig(config);
     expect(errors).toContain(
-      'epimetheus: toolFilter.toolResult.exclude cannot be empty. Using default: {"exclude":["grep","find","ls","write","edit","hindsight_retain","hindsight_recall","hindsight_reflect","hindsight_graph"]}.'
+      'epimetheus: toolFilter.toolResult.exclude cannot be empty. Using default: {"exclude":["grep","find","ls","write","edit","hindsight_retain","hindsight_recall","hindsight_reflect","hindsight_graph","hindsight_consolidate"]}.'
     );
     expect(config.toolFilter.toolResult).toEqual({
       exclude: [
@@ -2324,6 +2332,7 @@ describe("loadConfig", () => {
         "hindsight_recall",
         "hindsight_reflect",
         "hindsight_graph",
+        "hindsight_consolidate",
       ],
     });
   });
